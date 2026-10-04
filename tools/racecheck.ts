@@ -5,10 +5,10 @@ const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--ena
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 const errors: string[] = [];
 page.on('pageerror', (e) => errors.push(String(e)));
-await page.goto('http://localhost:5174/?laps=1&autopilot');
+await page.goto(`${process.argv[2] ?? 'http://localhost:5174/'}?laps=1&autopilot`);
 await page.click('.go');
 await page.click('.select .go');
-await page.waitForSelector('.results', { timeout: 240_000 });
+await page.waitForSelector('.results', { timeout: 540_000 });
 await page.screenshot({ path: 'shots/results.png' });
 console.log(await page.locator('.results').innerText());
 console.log('errors:', errors.length ? errors : 'none');
