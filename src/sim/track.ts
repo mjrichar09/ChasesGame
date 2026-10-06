@@ -49,7 +49,16 @@ export interface GapDef extends TrackAnchor {
   rampHeight: number;
 }
 
-export type FeatureDef = KickerDef | GapDef;
+/** A shallow stream running across the road: drivable, but it drags and loosens grip. */
+export interface StreamDef extends TrackAnchor {
+  kind: 'stream';
+  /** Width of the water along the road, m. */
+  width: number;
+  /** Angle the stream crosses at, rad from square-on (for the renderer). */
+  skew?: number;
+}
+
+export type FeatureDef = KickerDef | GapDef | StreamDef;
 
 export interface PickupRowDef extends TrackAnchor {
   /** Lateral positions across the road, m (+ = right). */
@@ -96,6 +105,12 @@ export interface Gap {
   s1: number;
 }
 
+export interface Water {
+  s0: number;
+  s1: number;
+  skew: number;
+}
+
 export interface Wall {
   /** Centre, half extents and yaw of a cuboid along the road edge. */
   center: Vec3;
@@ -115,7 +130,10 @@ export const DS = 1;
 const MAX_BANK = 0.28;
 /** Bank per unit curvature (rad · m). */
 const BANK_GAIN = 9;
+/** Visible log height, m. */
 export const WALL_HEIGHT = 1.1;
+/** Collision height, m — taller than the logs so a bouncing kart cannot hop them. */
+export const WALL_SOLID_HEIGHT = 1.6;
 export const WALL_THICK = 0.6;
 
 export class Track {
@@ -124,6 +142,7 @@ export class Track {
   readonly length: number;
   readonly kickers: Kicker[] = [];
   readonly gaps: Gap[] = [];
+  readonly waters: Water[] = [];
   readonly walls: Wall[] = [];
   readonly pickups: Pickup[] = [];
   /** `s` of each control point, before the start offset is applied. */
@@ -138,7 +157,9 @@ export class Track {
 
     for (const f of def.features) {
       const s = this.anchor(f);
-      if (f.kind === 'kicker') {
+      if (f.kind === 'stream') {
+        this.waters.push({ s0: s - f.width / 2, s1: s + f.width / 2, skew: f.skew ?? 0 });
+      } else if (f.kind === 'kicker') {
         const hw = (f.width ?? def.width) / 2;
         this.kickers.push({ s0: s, s1: s + f.length, height: f.height, lateral: f.lateral ?? 0, halfWidth: hw });
       } else {
@@ -192,6 +213,11 @@ export class Track {
   pointAt(s: number, lateral: number): Vec3 {
     const k = this.at(s);
     return add(k.p, scale(k.r, lateral));
+  }
+
+  inWater(s: number): boolean {
+    const w = this.wrap(s);
+    return this.waters.some((r) => this.between(w, r.s0, r.s1));
   }
 
   inGap(s: number): boolean {
@@ -258,24 +284,38 @@ export class Track {
     return h;
   }
 
-  /** Low barriers along both edges — logs in the render — broken at gaps. */
+  /**
+   * Low barriers along both edges — logs in the render — broken at gaps.
+   *
+   * Each barrier is a run of straight boxes. On the inside of a tight corner a
+   * 4 m box is a chord that cuts across the road (a hairpin's inner edge can
+   * have a radius under a metre), so segments shrink there to follow the curve.
+   */
   private buildWalls(): void {
-    const SEG = 4;
-    for (let s = 0; s < this.length; s += SEG) {
-      if (this.inGap(s) || this.inGap(s + SEG)) continue;
-      for (const side of [-1, 1] as const) {
-        const a = this.pointAt(s, side * (this.at(s).halfWidth + WALL_THICK / 2));
-        const b = this.pointAt(s + SEG, side * (this.at(s + SEG).halfWidth + WALL_THICK / 2));
-        const mid = scale(add(a, b), 0.5);
-        const d = sub(b, a);
-        const len = Math.hypot(d.x, d.z);
-        this.walls.push({
-          center: add(mid, v3(0, WALL_HEIGHT / 2 - 0.15, 0)),
-          // A little overlap so there are no seams to snag on.
-          half: v3(WALL_THICK / 2, WALL_HEIGHT / 2 + 0.15, len / 2 + 0.3),
-          yaw: Math.atan2(d.x, d.z),
-          side,
-        });
+    for (const side of [-1, 1] as const) {
+      let s = 0;
+      while (s < this.length) {
+        const k = this.at(s);
+        // + curvature turns left, so the left (-1) side is the inside.
+        const inside = Math.sign(k.curvature) === -side;
+        const innerR = 1 / Math.max(Math.abs(k.curvature), 1e-4) - k.halfWidth;
+        const seg = inside ? clamp(innerR * 0.5, 0.5, 4) : 4;
+        const next = s + seg;
+        if (!this.inGap(s) && !this.inGap(next)) {
+          const a = this.pointAt(s, side * (k.halfWidth + WALL_THICK / 2));
+          const b = this.pointAt(next, side * (this.at(next).halfWidth + WALL_THICK / 2));
+          const mid = scale(add(a, b), 0.5);
+          const d = sub(b, a);
+          const len = Math.hypot(d.x, d.z);
+          this.walls.push({
+            center: add(mid, v3(0, WALL_SOLID_HEIGHT / 2 - 0.15, 0)),
+            // A little overlap so there are no seams to snag on.
+            half: v3(WALL_THICK / 2, WALL_SOLID_HEIGHT / 2 + 0.15, len / 2 + Math.min(0.3, seg * 0.1)),
+            yaw: Math.atan2(d.x, d.z),
+            side,
+          });
+        }
+        s = next;
       }
     }
   }
@@ -348,6 +388,52 @@ export class Track {
   }
 }
 
+/** Inside-edge clearance every corner keeps, m. */
+const MIN_INNER_RADIUS = 2.5;
+
+/**
+ * Round off any corner tighter than the road can take.
+ *
+ * Where the centreline radius drops below half the road width, the road's
+ * inside edge folds back on itself: the barrier boxes there end up poking
+ * across the road and karts jam on them. A sharp apex in the control points
+ * (or a spline overshooting one) does exactly that, so rather than trusting
+ * every track's points, the samples are relaxed — each too-tight sample eased
+ * toward its neighbours' midpoint — until the radius everywhere is at least
+ * half the width plus `MIN_INNER_RADIUS`. Heights are left alone.
+ */
+function relaxTightCorners(raw: { p: Vec3; w: number }[]): void {
+  const n = raw.length;
+  const radius = (i: number): number => {
+    const a = raw[(i - 3 + n) % n]!.p;
+    const b = raw[i]!.p;
+    const c = raw[(i + 3) % n]!.p;
+    const ab = Math.hypot(b.x - a.x, b.z - a.z);
+    const bc = Math.hypot(c.x - b.x, c.z - b.z);
+    const ca = Math.hypot(a.x - c.x, a.z - c.z);
+    const area = Math.abs((b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z)) / 2;
+    return area > 1e-9 ? (ab * bc * ca) / (4 * area) : Infinity;
+  };
+  for (let pass = 0; pass < 400; pass++) {
+    let moved = false;
+    for (let i = 0; i < n; i++) {
+      if (radius(i) >= raw[i]!.w / 2 + MIN_INNER_RADIUS) continue;
+      // Ease a small neighbourhood so the fix spreads rather than kinking.
+      for (let k = -2; k <= 2; k++) {
+        const j = (i + k + n) % n;
+        const prev = raw[(j - 1 + n) % n]!.p;
+        const next = raw[(j + 1) % n]!.p;
+        const p = raw[j]!.p;
+        const w = 0.35 * (1 - Math.abs(k) * 0.3);
+        p.x += ((prev.x + next.x) / 2 - p.x) * w;
+        p.z += ((prev.z + next.z) / 2 - p.z) * w;
+      }
+      moved = true;
+    }
+    if (!moved) break;
+  }
+}
+
 /** Centripetal Catmull-Rom between p1 and p2. */
 function catmull(p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3, t: number): Vec3 {
   const alpha = 0.5;
@@ -412,6 +498,7 @@ function buildSamples(def: TrackDef): { samples: Sample[]; pointS: number[] } {
     const b = dense[(j + 1) % dense.length]!;
     raw.push({ p: add(a.p, scale(sub(b.p, a.p), f)), w: a.w + (b.w - a.w) * f });
   }
+  relaxTightCorners(raw);
 
   const up = v3(0, 1, 0);
   const tangents = raw.map((_, i) => normalize(sub(raw[(i + 1) % count]!.p, raw[(i - 1 + count) % count]!.p)));

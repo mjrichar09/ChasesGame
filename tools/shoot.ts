@@ -41,13 +41,36 @@ const hud = () =>
     touch: getComputedStyle(document.querySelector('.touch')!).display,
   }));
 
+// A finger on a touch button: a pointer event at the button's centre, so the
+// controls' "which button is under this finger" logic runs for real.
+const finger = (sel: string, type: 'pointerdown' | 'pointerup', id: number) =>
+  page.evaluate(
+    ([sel, type, id]) => {
+      const el = document.querySelector(sel as string)!;
+      const r = el.getBoundingClientRect();
+      el.dispatchEvent(
+        new PointerEvent(type as string, {
+          bubbles: true,
+          pointerId: id as number,
+          pointerType: 'touch',
+          clientX: r.left + r.width / 2,
+          clientY: r.top + r.height / 2,
+        }),
+      );
+    },
+    [sel, type, id] as const,
+  );
+
 if (mobile) {
-  // Touch: gas is automatic. Tap the item button now and then.
+  // Hold GAS with one finger the whole time; tap the item button with another.
+  await finger('.tb-gas', 'pointerdown', 11);
   for (let i = 0; i < 6; i++) {
     await page.waitForTimeout(2500);
-    await page.dispatchEvent('.tb-item', 'pointerdown');
+    await finger('.tb-item', 'pointerdown', 12);
     await page.waitForTimeout(150);
-    await page.dispatchEvent('.tb-item', 'pointerup');
+    await finger('.tb-item', 'pointerup', 12);
+    if (i === 3) await finger('.tb-brake', 'pointerdown', 13);
+    if (i === 4) await finger('.tb-brake', 'pointerup', 13);
     await page.screenshot({ path: `shots/${tag}-4-race-${i}.png` });
     console.log(i, await hud());
   }

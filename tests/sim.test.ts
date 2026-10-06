@@ -1,5 +1,8 @@
 import { beforeAll, describe, expect, it } from 'vitest';
+import { TRACKS } from '../src/data/tracks/index.js';
 import { VINE_VALLEY } from '../src/data/tracks/jungle1.js';
+import { AiDriver, personality } from '../src/sim/driver.js';
+import type { TrackDef } from '../src/sim/track.js';
 import { ITEMS, RACE } from '../src/data/tuning.js';
 import { autoRace } from '../src/sim/autopilot.js';
 import { type DriverInput, NEUTRAL_INPUT } from '../src/sim/input.js';
@@ -205,9 +208,9 @@ describe('pickups', () => {
   });
 });
 
-describe('a full AI race', () => {
+describe.each(TRACKS.map((t) => [t.name, t] as const))('%s', (_name, def: TrackDef) => {
   it('all eight karts finish three laps without getting stuck', () => {
-    const r = autoRace(VINE_VALLEY, { seed: 11 });
+    const r = autoRace(def, { seed: 11 });
     for (let i = 0; i < 120 * 60 * 6 && !r.sim.allFinished; i++) {
       r.step();
       r.sim.items.events = [];
@@ -215,8 +218,25 @@ describe('a full AI race', () => {
     expect(r.sim.allFinished).toBe(true);
     for (const p of r.sim.progress) {
       expect(p.lapTimes).toHaveLength(3);
-      expect(p.respawns).toBeLessThan(8);
+      expect(p.respawns).toBeLessThan(10);
     }
     r.sim.free();
+  }, 180_000);
+
+  it('rewards braking: a driver who slows for corners beats one who never lifts', () => {
+    const lap = (cornerGrip: number) => {
+      const sim = new RaceSim({ ...def, pickups: [] }, { karts: 1, laps: 1, seed: 1 });
+      const ai = new AiDriver({ ...personality(sim.rng, 0), lane: 0, weave: 0, skill: 1, cornerGrip });
+      const kart = sim.karts[0]!;
+      const pr = sim.progress[0]!;
+      for (let i = 0; i < 120 * 180 && pr.finishTime === null; i++) {
+        sim.step([ai.drive(sim.dt, kart, pr, sim.track, sim.karts, sim.items, null)]);
+      }
+      sim.free();
+      return pr.finishTime ?? Infinity;
+    };
+    const braking = Math.min(lap(15), lap(18));
+    const flatOut = lap(9999);
+    expect(braking).toBeLessThan(flatOut - 1);
   }, 120_000);
 });

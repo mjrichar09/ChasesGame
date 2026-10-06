@@ -10,6 +10,7 @@
  */
 
 import * as THREE from 'three';
+import type { TrackLook } from '../data/tracks/looks.js';
 
 export interface Quality {
   pixelRatio: number;
@@ -29,6 +30,8 @@ export class Stage {
   readonly scene = new THREE.Scene();
   readonly sun: THREE.DirectionalLight;
   readonly quality: Quality;
+  private readonly hemi: THREE.HemisphereLight;
+  private readonly sky: THREE.Mesh;
 
   constructor(canvas: HTMLCanvasElement) {
     this.quality = pickQuality();
@@ -41,9 +44,11 @@ export class Stage {
     const fogColor = new THREE.Color(0xbfe3c8);
     this.scene.background = fogColor;
     this.scene.fog = new THREE.Fog(fogColor, 70, 300);
-    this.scene.add(skyDome());
+    this.sky = skyDome();
+    this.scene.add(this.sky);
 
-    this.scene.add(new THREE.HemisphereLight(0xfff4d6, 0x3f6b2a, 1.4));
+    this.hemi = new THREE.HemisphereLight(0xfff4d6, 0x3f6b2a, 1.4);
+    this.scene.add(this.hemi);
     this.sun = new THREE.DirectionalLight(0xfff0c8, 2.2);
     this.sun.position.set(60, 90, 30);
     this.sun.castShadow = this.quality.shadows;
@@ -55,6 +60,23 @@ export class Stage {
     sc.far = 220;
     this.sun.shadow.bias = -0.0008;
     this.scene.add(this.sun, this.sun.target);
+  }
+
+  /** Switch sky, fog and light to a track's look. */
+  applyLook(look: TrackLook): void {
+    const fog = this.scene.fog as THREE.Fog;
+    fog.color.set(look.fog);
+    fog.near = look.fogNear;
+    fog.far = look.fogFar;
+    (this.scene.background as THREE.Color).set(look.fog);
+    const u = (this.sky.material as THREE.ShaderMaterial).uniforms;
+    (u.top!.value as THREE.Color).set(look.skyTop);
+    (u.horizon!.value as THREE.Color).set(look.skyHorizon);
+    this.hemi.color.set(look.hemiSky);
+    this.hemi.groundColor.set(look.hemiGround);
+    this.hemi.intensity = look.hemiIntensity;
+    this.sun.color.set(look.sun);
+    this.sun.intensity = look.sunIntensity;
   }
 
   /** Keep the shadow box centred on what the player is looking at. */

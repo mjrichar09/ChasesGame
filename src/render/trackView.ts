@@ -9,8 +9,9 @@
  */
 
 import * as THREE from 'three';
+import type { TrackLook } from '../data/tracks/looks.js';
 import { Rng } from '../sim/rng.js';
-import { type Track, WALL_HEIGHT, WALL_THICK } from '../sim/track.js';
+import { type Track, WALL_HEIGHT, WALL_SOLID_HEIGHT, WALL_THICK } from '../sim/track.js';
 import { GEO, PartBuilder, toon } from './toon.js';
 
 export interface TrackView {
@@ -56,9 +57,9 @@ function roadTexture(): THREE.CanvasTexture {
   });
 }
 
-function groundTexture(): THREE.CanvasTexture {
+function groundTexture(base: string): THREE.CanvasTexture {
   return canvasTexture(256, 256, (c) => {
-    c.fillStyle = '#3f7f2f';
+    c.fillStyle = base;
     c.fillRect(0, 0, 256, 256);
     const rng = new Rng(9);
     for (let i = 0; i < 2600; i++) {
@@ -93,18 +94,21 @@ function plankTexture(): THREE.CanvasTexture {
   });
 }
 
-export function buildTrackView(track: Track): TrackView {
+export function buildTrackView(track: Track, look: TrackLook): TrackView {
   const group = new THREE.Group();
   group.add(roadMesh(track));
   group.add(skirtMesh(track));
-  group.add(ground());
+  group.add(ground(look.ground));
   group.add(walls(track));
   for (const k of kickerMeshes(track)) group.add(k);
   const water = river(track);
+  if (look.stream) water.push(stream(look.stream));
+  for (const w of fords(track)) water.push(w);
   for (const w of water) group.add(w);
   group.add(startArch(track));
-  group.add(vineArches(track));
-  group.add(scenery(track));
+  if (look.vineArches) group.add(vineArches(track));
+  if (look.canopy) group.add(canopy(track));
+  group.add(scenery(track, look.scenery));
 
   return {
     group,
@@ -207,8 +211,8 @@ function skirtMesh(track: Track): THREE.Mesh {
   return mesh;
 }
 
-function ground(): THREE.Mesh {
-  const tex = groundTexture();
+function ground(base: string): THREE.Mesh {
+  const tex = groundTexture(base);
   tex.repeat.set(120, 120);
   const mesh = new THREE.Mesh(
     new THREE.PlaneGeometry(1400, 1400),
@@ -231,13 +235,15 @@ function walls(track: Track): THREE.Group {
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const rng = new Rng(21);
+  // The collider is taller than the log; sit the log at the bottom of it.
+  const drop = (WALL_SOLID_HEIGHT - WALL_HEIGHT) / 2;
   track.walls.forEach((w, i) => {
     q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), w.yaw);
     const s = 0.9 + rng.next() * 0.2;
-    m.compose(new THREE.Vector3(w.center.x, w.center.y - 0.1, w.center.z), q, new THREE.Vector3(s, s * 0.9, w.half.z * 2));
+    m.compose(new THREE.Vector3(w.center.x, w.center.y - drop - 0.1, w.center.z), q, new THREE.Vector3(s, s * 0.9, w.half.z * 2));
     logs.setMatrixAt(i, m);
     const off = new THREE.Vector3(0, 0, w.half.z).applyQuaternion(q);
-    m.compose(new THREE.Vector3(w.center.x + off.x, w.center.y + 0.1, w.center.z + off.z), q, new THREE.Vector3(1, 1, 1));
+    m.compose(new THREE.Vector3(w.center.x + off.x, w.center.y - drop + 0.1, w.center.z + off.z), q, new THREE.Vector3(1, 1, 1));
     stakes.setMatrixAt(i, m);
   });
   logs.castShadow = true;
@@ -409,7 +415,7 @@ function vineArches(track: Track): THREE.Group {
 }
 
 /** Instanced jungle: palms, broadleaf trees, ferns, bushes, rocks, flowers. */
-function scenery(track: Track): THREE.Group {
+function scenery(track: Track, density: number): THREE.Group {
   const g = new THREE.Group();
   const rng = new Rng(77);
   const protos = {
@@ -455,7 +461,8 @@ function scenery(track: Track): THREE.Group {
   for (const kind of Object.keys(protos) as (keyof typeof protos)[]) {
     const placements: THREE.Matrix4[] = [];
     let tries = 0;
-    while (placements.length < counts[kind] && tries++ < counts[kind] * 8) {
+    const want = Math.round(counts[kind] * density);
+    while (placements.length < want && tries++ < want * 8) {
       const s = rng.range(0, track.length);
       const side = rng.next() < 0.5 ? -1 : 1;
       const k = track.at(s);
@@ -476,6 +483,251 @@ function scenery(track: Track): THREE.Group {
       inst.castShadow = kind === 'palm' || kind === 'tree';
       g.add(inst);
     }
+  }
+  return g;
+}
+
+/** A water texture: blue with drifting white ripples. */
+function waterTexture(): THREE.CanvasTexture {
+  return canvasTexture(128, 128, (c) => {
+    c.fillStyle = '#3a9fb8';
+    c.fillRect(0, 0, 128, 128);
+    const rng = new Rng(8);
+    c.strokeStyle = 'rgba(255,255,255,0.55)';
+    c.lineWidth = 3;
+    for (let i = 0; i < 16; i++) {
+      const x = rng.range(0, 128);
+      const y = rng.range(0, 128);
+      c.beginPath();
+      c.moveTo(x, y);
+      c.quadraticCurveTo(x + 6, y - 4, x + 16, y);
+      c.stroke();
+    }
+  });
+}
+
+/**
+ * A creek winding across the map: a water ribbon along the polyline with
+ * muddy banks, just above the jungle floor. Where it crosses the road (which
+ * dips to the same level there) the water runs over the road surface.
+ */
+function stream(path: { x: number; z: number }[]): THREE.Mesh {
+  const curve = new THREE.CatmullRomCurve3(path.map((p) => new THREE.Vector3(p.x, 0, p.z)));
+  const n = 220;
+  const pts = curve.getSpacedPoints(n);
+  const WATER_Y = -0.36;
+  const half = 7;
+  const ribbon = (y: number, widen: number): THREE.BufferGeometry => {
+    const pos: number[] = [];
+    const uv: number[] = [];
+    const idx: number[] = [];
+    let along = 0;
+    for (let i = 0; i <= n; i++) {
+      const p = pts[i]!;
+      const t = new THREE.Vector3().subVectors(pts[Math.min(i + 1, n)]!, pts[Math.max(i - 1, 0)]!).normalize();
+      const side = new THREE.Vector3(-t.z, 0, t.x);
+      // A little width variation so it reads as a natural creek.
+      const w = half * widen * (0.85 + 0.15 * Math.sin(i * 0.37));
+      if (i > 0) along += p.distanceTo(pts[i - 1]!);
+      for (const s of [-1, 1]) {
+        pos.push(p.x + side.x * w * s, y, p.z + side.z * w * s);
+        uv.push(s < 0 ? 0 : 2, along / 14);
+      }
+    }
+    for (let i = 0; i < n; i++) idx.push(i * 2, i * 2 + 2, i * 2 + 1, i * 2 + 1, i * 2 + 2, i * 2 + 3);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    geo.setIndex(idx);
+    geo.computeVertexNormals();
+    return geo;
+  };
+  const water = new THREE.Mesh(
+    ribbon(WATER_Y, 1),
+    new THREE.MeshToonMaterial({
+      map: waterTexture(),
+      gradientMap: toon(0).gradientMap,
+      emissive: 0x0b2a30,
+      transparent: true,
+      opacity: 0.88,
+      side: THREE.DoubleSide,
+    }),
+  );
+  water.renderOrder = 1;
+  // Muddy banks: a wider, darker ribbon just under the water.
+  water.add(
+    new THREE.Mesh(
+      ribbon(-0.47, 1.35),
+      new THREE.MeshToonMaterial({ color: 0x5a4126, gradientMap: toon(0).gradientMap, side: THREE.DoubleSide }),
+    ),
+  );
+  // Mossy stones along the edges.
+  const stones = new THREE.InstancedMesh(GEO.sphereLo, toon(0x7f8a6e), 90);
+  const rng = new Rng(31);
+  const m = new THREE.Matrix4();
+  for (let i = 0; i < 90; i++) {
+    const p = curve.getPointAt(rng.next());
+    const a = rng.range(0, Math.PI * 2);
+    const r = rng.range(5.5, 8.5);
+    const sc = rng.range(0.35, 0.9);
+    m.compose(
+      new THREE.Vector3(p.x + Math.cos(a) * r, -0.45, p.z + Math.sin(a) * r),
+      new THREE.Quaternion(),
+      new THREE.Vector3(sc * 1.3, sc * 0.6, sc),
+    );
+    stones.setMatrixAt(i, m);
+  }
+  water.add(stones);
+  return water;
+}
+
+/**
+ * Water over the road wherever the sim says the road is wet. The creek ribbon
+ * is flat, but the road is banked, so on its own the high side of a crossing
+ * would look dry while still dragging at the kart. This sheet follows the
+ * road surface exactly over the wet stretch, overlapping the creek either side.
+ */
+function fords(track: Track): THREE.Mesh[] {
+  return track.waters.map((w) => {
+    const pos: number[] = [];
+    const uv: number[] = [];
+    const idx: number[] = [];
+    const span = track.wrap(w.s1 - w.s0);
+    const steps = Math.ceil(span);
+    for (let i = 0; i <= steps; i++) {
+      const s = w.s0 + (span * i) / steps;
+      const k = track.at(s);
+      const hw = k.halfWidth + WALL_THICK + 1.5;
+      for (const side of [-1, 1]) {
+        const p = track.pointAt(s, side * hw);
+        pos.push(p.x + k.n.x * 0.1, p.y + k.n.y * 0.1, p.z + k.n.z * 0.1);
+        uv.push(side < 0 ? 0 : 2, s / 14);
+      }
+    }
+    for (let i = 0; i < steps; i++) idx.push(i * 2, i * 2 + 1, i * 2 + 2, i * 2 + 1, i * 2 + 3, i * 2 + 2);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    geo.setIndex(idx);
+    geo.computeVertexNormals();
+    const mesh = new THREE.Mesh(
+      geo,
+      new THREE.MeshToonMaterial({
+        map: waterTexture(),
+        gradientMap: toon(0).gradientMap,
+        emissive: 0x0b2a30,
+        transparent: true,
+        opacity: 0.85,
+        side: THREE.DoubleSide,
+      }),
+    );
+    mesh.renderOrder = 2;
+    return mesh;
+  });
+}
+
+/**
+ * The canopy: giant buttressed trunks lining the course, a closed roof of
+ * leaves high overhead, hanging vines, and shafts of sunlight breaking
+ * through. All instanced. The leaves cast no shadows — under a closed roof
+ * that would black out the road — the light shafts do the dappling instead.
+ */
+function canopy(track: Track): THREE.Group {
+  const g = new THREE.Group();
+  const rng = new Rng(57);
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const up = new THREE.Vector3(0, 1, 0);
+
+  // Leaf roof: clumps on a lattice along and across the course.
+  const leafGeo = new THREE.IcosahedronGeometry(1, 0);
+  const leafMats = [toon(0x1f5a23), toon(0x2d7230), toon(0x3e8a37)];
+  const leaves: THREE.Matrix4[][] = [[], [], []];
+  for (let s = 0; s < track.length; s += 5) {
+    const k = track.at(s);
+    for (let lat = -k.halfWidth - 26; lat <= k.halfWidth + 26; lat += 6.5) {
+      const p = track.pointAt(s + rng.range(-2, 2), lat + rng.range(-2, 2));
+      const sc = rng.range(4.5, 7.5);
+      q.setFromAxisAngle(up, rng.range(0, Math.PI * 2));
+      m.compose(new THREE.Vector3(p.x, k.p.y + rng.range(12.5, 16), p.z), q, new THREE.Vector3(sc, sc * 0.45, sc));
+      leaves[Math.floor(rng.next() * 3)]!.push(m.clone());
+    }
+  }
+  leaves.forEach((list, i) => {
+    const inst = new THREE.InstancedMesh(leafGeo, leafMats[i]!, list.length);
+    list.forEach((pm, j) => inst.setMatrixAt(j, pm));
+    g.add(inst);
+  });
+
+  // Giant trunks holding it up, with buttress roots.
+  const b = new PartBuilder();
+  const node = new THREE.Object3D();
+  b.add(node, GEO.cylinder, toon(0x5b4330), { pos: [0, 8, 0], scale: [1.0, 16, 1.0] });
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2;
+    b.add(node, GEO.box, toon(0x4e3927), { pos: [Math.cos(a) * 1.1, 1.2, Math.sin(a) * 1.1], rot: [0, -a, 0.35], scale: [1.6, 2.6, 0.3] });
+  }
+  b.add(node, GEO.cylinder, toon(0x3f7d2c), { pos: [0, 6, 0], scale: [1.05, 0.8, 1.05] });
+  const trunk = b.geometries(node);
+  const spots: THREE.Matrix4[] = [];
+  for (let s = 0; s < track.length; s += 11) {
+    for (const side of [-1, 1]) {
+      const k = track.at(s);
+      const p = track.pointAt(s + rng.range(-3, 3), side * (k.halfWidth + rng.range(4.5, 11)));
+      const near = track.project({ x: p.x, y: p.y, z: p.z });
+      if (Math.abs(near.lateral) < track.at(near.s).halfWidth + 3.5) continue;
+      const sc = rng.range(0.8, 1.25);
+      q.setFromAxisAngle(up, rng.range(0, Math.PI * 2));
+      m.compose(new THREE.Vector3(p.x, -0.5, p.z), q, new THREE.Vector3(sc, rng.range(0.85, 1.05), sc));
+      spots.push(m.clone());
+    }
+  }
+  for (const [mat, geo] of trunk) {
+    const inst = new THREE.InstancedMesh(geo, mat, spots.length);
+    spots.forEach((pm, j) => inst.setMatrixAt(j, pm));
+    inst.castShadow = true;
+    g.add(inst);
+  }
+
+  // Hanging vines, well above kart height.
+  const vineGeo = new THREE.CylinderGeometry(0.06, 0.04, 1, 5);
+  vineGeo.translate(0, -0.5, 0);
+  const vines = new THREE.InstancedMesh(vineGeo, toon(0x2f6b25), 420);
+  for (let i = 0; i < 420; i++) {
+    const s = rng.range(0, track.length);
+    const k = track.at(s);
+    const p = track.pointAt(s, rng.range(-k.halfWidth - 8, k.halfWidth + 8));
+    m.compose(new THREE.Vector3(p.x, k.p.y + 13, p.z), new THREE.Quaternion(), new THREE.Vector3(1, rng.range(4, 8), 1));
+    vines.setMatrixAt(i, m);
+  }
+  g.add(vines);
+
+  // Sunbeams: tall additive cones angled down through gaps in the roof.
+  const beamMat = new THREE.MeshBasicMaterial({
+    map: canvasTexture(4, 64, (c) => {
+      const grad = c.createLinearGradient(0, 0, 0, 64);
+      grad.addColorStop(0, 'rgba(255,250,200,0)');
+      grad.addColorStop(0.35, 'rgba(255,250,200,0.5)');
+      grad.addColorStop(1, 'rgba(255,250,200,0)');
+      c.fillStyle = grad;
+      c.fillRect(0, 0, 4, 64);
+    }),
+    transparent: true,
+    opacity: 0.55,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    fog: false,
+  });
+  const beamGeo = new THREE.CylinderGeometry(1.2, 3.2, 16, 12, 1, true);
+  for (let i = 0; i < 34; i++) {
+    const s = rng.range(0, track.length);
+    const k = track.at(s);
+    const p = track.pointAt(s, rng.range(-k.halfWidth, k.halfWidth));
+    const beam = new THREE.Mesh(beamGeo, beamMat);
+    beam.position.set(p.x + 2, k.p.y + 7, p.z + 1);
+    beam.rotation.set(0.18, 0, -0.22);
+    g.add(beam);
   }
   return g;
 }

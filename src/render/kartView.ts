@@ -13,6 +13,7 @@ import * as THREE from 'three';
 import type { Gorilla } from '../data/gorillas.js';
 import { ITEMS, KART } from '../data/tuning.js';
 import type { Kart } from '../sim/kart.js';
+import { celebrate } from './celebrate.js';
 import { type KartRig, buildKart } from './kartModel.js';
 import { GEO, PartBuilder, toon } from './toon.js';
 
@@ -34,6 +35,11 @@ export class KartView {
   private lean = 0;
   private lastVelY = 0;
   private spinVisual = 0;
+  /** Celebration: seconds left (Infinity = until stopped), time into it, and whether seated. */
+  private celebLeft = 0;
+  private celebT = 0;
+  private celebSeated = true;
+  private readonly seatY: number;
   /** Rendered pose this frame, for the camera and effects. */
   readonly pos = new THREE.Vector3();
   readonly rot = new THREE.Quaternion();
@@ -44,6 +50,55 @@ export class KartView {
     this.snake = buildSnake();
     this.snake.visible = false;
     this.rig.gorilla.hands[1].add(this.snake);
+    this.seatY = this.rig.gorilla.root.position.y;
+  }
+
+  /** Start this gorilla's celebration: seated (mid-race) or standing (podiums). */
+  celebrate(seconds: number, seated: boolean): void {
+    if (this.celebLeft <= 0) this.celebT = 0;
+    this.celebLeft = seconds;
+    this.celebSeated = seated;
+  }
+
+  stopCelebrating(): void {
+    this.celebLeft = 0;
+  }
+
+  get celebrating(): boolean {
+    return this.celebLeft > 0;
+  }
+
+  /** Blend the celebration over whatever pose the frame has set so far. */
+  private applyCelebration(dt: number): void {
+    const g = this.rig.gorilla;
+    if (this.celebLeft <= 0) {
+      g.root.position.y = this.seatY;
+      return;
+    }
+    this.celebT += dt;
+    this.celebLeft -= dt;
+    // Ease in over 0.2 s, out over the last 0.3 s.
+    const w = Math.min(1, this.celebT / 0.2, this.celebLeft / 0.3);
+    celebrate(g, this.gorilla.celebration, this.celebT, w, this.celebSeated, this.seatY);
+  }
+
+  /**
+   * Animate a kart that is not in a race (menu or finish podium): rest pose,
+   * idle breathing, and any celebration.
+   */
+  animateIdle(dt: number): void {
+    const g = this.rig.gorilla;
+    for (let i = 0; i < 2; i++) {
+      g.arms[i]!.rotation.copy(g.rest[i]!.shoulder);
+      g.elbows[i]!.rotation.copy(g.rest[i]!.elbow);
+    }
+    this.bob += dt;
+    g.torso.position.y = 0.28 + Math.sin(this.bob * 2) * 0.012;
+    g.torso.rotation.set(0, 0, 0);
+    g.torso.scale.set(1, 1, 1);
+    g.head.rotation.set(0, Math.sin(this.bob * 0.7) * 0.25, 0);
+    this.snake.visible = false;
+    this.applyCelebration(dt);
   }
 
   get object(): THREE.Object3D {
@@ -149,6 +204,9 @@ export class KartView {
     if (kart.wobbleTime > 0) {
       g.head.rotation.z = Math.sin(kart.wobbleTime * 30) * 0.35;
     }
+    // A spin-out or a wobble interrupts any celebrating.
+    if (kart.spinning || kart.wobbleTime > 0) this.celebLeft = 0;
+    this.applyCelebration(dt);
   }
 }
 

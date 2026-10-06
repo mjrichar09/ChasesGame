@@ -209,6 +209,38 @@ button:focus-visible {
   font-size: clamp(28px, 5vw, 42px);
 }
 
+.tracks {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.track {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  font-size: 18px;
+  padding: 8px 14px;
+  background: rgba(36, 22, 10, 0.8);
+  color: var(--cream);
+  text-align: left;
+  max-width: 280px;
+}
+
+.track span {
+  font-family: var(--body);
+  font-size: 12px;
+  font-weight: 700;
+  opacity: 0.85;
+}
+
+.track.on {
+  background: var(--banana);
+  color: var(--ink);
+}
+
 .who {
   margin-top: auto;
   text-align: center;
@@ -277,6 +309,14 @@ button:focus-visible {
   background: rgba(36, 22, 10, 0.75);
   border-radius: 12px;
   padding: 8px 12px;
+}
+
+/* Results dock to the side so the finish podium stays in view. */
+.panel.results {
+  left: auto;
+  right: calc(24px + var(--safe-r));
+  transform: translateY(-50%);
+  width: min(44vw, 440px);
 }
 
 .results table {
@@ -538,6 +578,8 @@ button:focus-visible {
 }
 
 .touch-buttons {
+  pointer-events: auto;
+  touch-action: none;
   position: absolute;
   right: calc(14px + var(--safe-r));
   bottom: calc(16px + var(--safe-b));
@@ -545,7 +587,7 @@ button:focus-visible {
   grid-template-columns: repeat(3, auto);
   grid-template-areas:
     'wl item wr'
-    '. brake .';
+    'brake brake gas';
   gap: 10px;
   align-items: center;
   justify-items: center;
@@ -574,21 +616,37 @@ button:focus-visible {
   background: #9be07c;
 }
 
-.tb-whack:first-child {
+.tb-wl {
   grid-area: wl;
 }
 
-.tb-whack:nth-child(3) {
+.tb-wr {
   grid-area: wr;
 }
 
+/* Pedals: big, square-ish, right under the thumb. */
 .tb-brake {
   grid-area: brake;
-  width: 90px;
-  height: 52px;
-  border-radius: 14px;
-  font-size: 18px;
+  justify-self: end;
+  width: 104px;
+  height: 92px;
+  border-radius: 20px;
+  font-size: 20px;
   background: #ff9a7a;
+}
+
+.tb-gas {
+  grid-area: gas;
+  width: 104px;
+  height: 120px;
+  border-radius: 20px;
+  font-size: 24px;
+  background: #8fe06a;
+}
+
+.tb-brake,
+.tb-gas {
+  align-self: end;
 }
 
 /* --------------------------------------------------------- small screens */
@@ -661,6 +719,55 @@ button:focus-visible {
   }
   .keys {
     display: none;
+  }
+  .panel.results {
+    width: min(48vw, 380px);
+    padding: 12px 14px;
+    gap: 6px;
+  }
+  .panel.results h2 {
+    font-size: 24px;
+  }
+  .results table {
+    font-size: 13px;
+  }
+  .results td {
+    padding: 2px 6px;
+  }
+  .results .big {
+    font-size: 18px;
+    padding: 6px 14px;
+  }
+  .track {
+    font-size: 14px;
+    padding: 5px 10px;
+  }
+  .track span {
+    display: none;
+  }
+  /* Touch cluster: compact enough to leave the road visible. */
+  .touch-buttons {
+    gap: 7px;
+  }
+  .tb-item {
+    width: 66px;
+    height: 66px;
+    font-size: 30px;
+  }
+  .tb-whack {
+    width: 50px;
+    height: 50px;
+    font-size: 15px;
+  }
+  .tb-brake {
+    width: 82px;
+    height: 72px;
+    font-size: 16px;
+  }
+  .tb-gas {
+    width: 82px;
+    height: 96px;
+    font-size: 20px;
   }
   .who-name {
     font-size: 30px;

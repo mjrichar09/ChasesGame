@@ -13,11 +13,11 @@
  */
 
 import RAPIER from '@dimforge/rapier3d-compat';
-import { RACE, SIM } from '../data/tuning.js';
+import { KART, RACE, SIM } from '../data/tuning.js';
 import { type DriverInput, NEUTRAL_INPUT } from './input.js';
 import { Items } from './items.js';
-import { Kart, yawQuat } from './kart.js';
-import { type Vec3, add, scale, v3 } from './math.js';
+import { BARRIER_GROUPS, GROUND_GROUPS, Kart, yawQuat } from './kart.js';
+import { type Vec3, add, dot, scale, v3 } from './math.js';
 import { Rng } from './rng.js';
 import { Track, type TrackDef } from './track.js';
 
@@ -47,6 +47,8 @@ export interface Progress {
   /** Seconds left of respawn grace. */
   grace: number;
   respawns: number;
+  /** Seconds before another wall bonk can register. */
+  bonkCooldown: number;
   /** Why the last respawn happened — for tuning and tests. */
   lastRespawn: 'fell' | 'offTrack' | 'stuck' | null;
   /** Best and per-lap times. */
@@ -102,6 +104,7 @@ export class RaceSim {
         stuck: 0,
         grace: 0,
         respawns: 0,
+        bonkCooldown: 0,
         lastRespawn: null,
         lapTimes: [],
       });
@@ -111,23 +114,32 @@ export class RaceSim {
   private buildTrack(): void {
     const ground = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
     const road = this.track.roadMesh();
-    this.world.createCollider(RAPIER.ColliderDesc.trimesh(road.vertices, road.indices).setFriction(0.6), ground);
+    this.world.createCollider(
+      RAPIER.ColliderDesc.trimesh(road.vertices, road.indices).setFriction(0.6).setCollisionGroups(GROUND_GROUPS),
+      ground,
+    );
     // The jungle floor around and under the track.
     this.world.createCollider(
-      RAPIER.ColliderDesc.cuboid(600, 0.5, 600).setTranslation(100, -1, -40).setFriction(0.8),
+      RAPIER.ColliderDesc.cuboid(600, 0.5, 600)
+        .setTranslation(100, -1, -40)
+        .setFriction(0.8)
+        .setCollisionGroups(GROUND_GROUPS),
       ground,
     );
     for (const hull of this.track.kickerHulls()) {
       const desc = RAPIER.ColliderDesc.convexHull(hull);
-      if (desc) this.world.createCollider(desc.setFriction(0.6), ground);
+      if (desc) this.world.createCollider(desc.setFriction(0.6).setCollisionGroups(GROUND_GROUPS), ground);
     }
     for (const w of this.track.walls) {
       this.world.createCollider(
         RAPIER.ColliderDesc.cuboid(w.half.x, w.half.y, w.half.z)
           .setTranslation(w.center.x, w.center.y, w.center.z)
           .setRotation(yawQuat(w.yaw))
-          .setFriction(0.1)
-          .setRestitution(0.4),
+          // Grippy logs: scraping along the barrier costs real speed, so
+          // overcooking a corner is slower than braking for it.
+          .setFriction(0.7)
+          .setRestitution(0.25)
+          .setCollisionGroups(BARRIER_GROUPS),
         ground,
       );
     }
@@ -178,6 +190,10 @@ export class RaceSim {
     const live = this.phase !== 'countdown';
     const held = this.karts.map((_, i) => (live ? (inputs[i] ?? NEUTRAL_INPUT) : NEUTRAL_INPUT));
 
+    for (const kart of this.karts) {
+      const pr = this.progress[kart.index]!;
+      kart.wet = this.track.inWater(pr.s) && Math.abs(pr.lateral) < this.track.at(pr.s).halfWidth + 4;
+    }
     this.items.step(dt, this.karts, held, live);
     for (const kart of this.karts) kart.step(dt, held[kart.index]!);
     this.world.step();
@@ -207,6 +223,7 @@ export class RaceSim {
     }
 
     const sample = this.track.at(p.s);
+    this.bonk(kart, pr, sample, p.lateral);
     const onRoad = sample.road && Math.abs(p.lateral) < sample.halfWidth + 1;
     if (onRoad && kart.grounded >= 2 && !this.nearGap(p.s)) pr.safeS = p.s;
 
@@ -215,7 +232,11 @@ export class RaceSim {
     if (Math.abs(p.lateral) > sample.halfWidth + 2.5) pr.offTrack += this.dt;
     else pr.offTrack = 0;
     const speed = Math.hypot(kart.velocity.x, kart.velocity.z);
-    if (this.phase === 'racing' && input.throttle > 0.5 && speed < 1 && !kart.spinning) pr.stuck += this.dt;
+    // Stuck: trying to go (either pedal — the AI backs out on the brake) and
+    // not moving, or hung up with no wheels on anything (beached on a barrier).
+    const trying = input.throttle > 0.5 || input.brake > 0.5;
+    const beached = kart.airTime > RACE.stuckTime;
+    if (this.phase === 'racing' && ((trying && speed < 1 && !kart.spinning) || beached)) pr.stuck += this.dt;
     else pr.stuck = 0;
 
     const why = fell ? 'fell' : pr.offTrack > RACE.offTrackTime ? 'offTrack' : pr.stuck > RACE.stuckTime ? 'stuck' : null;
@@ -223,6 +244,25 @@ export class RaceSim {
       pr.lastRespawn = why;
       this.respawn(kart);
     }
+  }
+
+  /**
+   * Arcade wall penalty. The kart's edge is at the barrier and it is closing on
+   * it fast: take a big bite of speed, wobble it, and report it for effects.
+   */
+  private bonk(kart: Kart, pr: Progress, sample: ReturnType<Track['at']>, lateral: number): void {
+    pr.bonkCooldown = Math.max(0, pr.bonkCooldown - this.dt);
+    if (pr.bonkCooldown > 0 || !sample.road || this.track.inWater(pr.s)) return;
+    const side = Math.sign(lateral);
+    if (Math.abs(lateral) < sample.halfWidth - KART.half.x - 0.35) return;
+    const v = kart.velocity;
+    // Closing speed toward this side's barrier (sample.r points to the right).
+    const closing = dot(v, sample.r) * side;
+    if (closing < KART.bonkSpeed) return;
+    kart.body.setLinvel(v3(v.x * KART.bonkKeep, v.y, v.z * KART.bonkKeep), true);
+    kart.wobbleTime = Math.max(kart.wobbleTime, 0.4);
+    pr.bonkCooldown = 0.6;
+    this.items.events.push({ type: 'bonk', kart: kart.index, pos: kart.position, strength: Math.min(1, closing / 12) });
   }
 
   /** True within the run-up to a gap, the gap itself, or just after it. */

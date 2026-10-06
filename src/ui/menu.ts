@@ -7,6 +7,8 @@
  */
 
 import { GORILLAS, type Gorilla } from '../data/gorillas.js';
+import { TRACKS } from '../data/tracks/index.js';
+import { LOOKS } from '../data/tracks/looks.js';
 import { escapeHtml } from './escape.js';
 import { formatTime, ordinal } from './hud.js';
 
@@ -22,12 +24,14 @@ export class Menu {
   readonly root: HTMLDivElement;
   onStart: ((gorilla: number) => void) | null = null;
   onPreview: ((gorilla: number) => void) | null = null;
+  onTrack: ((track: number) => void) | null = null;
   onResume: (() => void) | null = null;
   onRestart: (() => void) | null = null;
   onQuit: (() => void) | null = null;
   onMute: (() => boolean) | null = null;
   onGesture: (() => void) | null = null;
   private chosen = 0;
+  private track = 0;
 
   constructor(parent: HTMLElement) {
     this.root = document.createElement('div');
@@ -64,7 +68,7 @@ export class Menu {
     });
   }
 
-  select(initial = this.chosen): void {
+  select(initial = this.chosen, track = this.track): void {
     this.root.dataset.screen = 'select';
     const cards = GORILLAS.map(
       (g, i) => `
@@ -76,6 +80,9 @@ export class Menu {
     this.root.innerHTML = `
       <div class="select">
         <h2>CHOOSE YOUR GORILLA</h2>
+        <div class="tracks">${TRACKS.map(
+          (t, i) => `<button class="track" data-t="${i}"><b>${escapeHtml(t.name)}</b><span>${escapeHtml(LOOKS[t.id]?.blurb ?? '')}</span></button>`,
+        ).join('')}</div>
         <div class="who"><div class="who-name"></div><div class="who-tag"></div></div>
         <div class="cards">${cards}</div>
         <div class="select-foot">
@@ -95,7 +102,20 @@ export class Menu {
       this.onGesture?.();
       this.onStart?.(this.chosen);
     });
+    for (const b of this.root.querySelectorAll<HTMLButtonElement>('.track')) {
+      b.addEventListener('click', () => {
+        this.onGesture?.();
+        this.pickTrack(Number(b.dataset.t));
+      });
+    }
+    this.pickTrack(track);
     this.pick(initial);
+  }
+
+  private pickTrack(i: number): void {
+    this.track = i;
+    for (const b of this.root.querySelectorAll<HTMLElement>('.track')) b.classList.toggle('on', Number(b.dataset.t) === i);
+    this.onTrack?.(i);
   }
 
   private pick(i: number): void {

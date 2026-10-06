@@ -37,13 +37,13 @@ export const KART = {
 
   /** Drive force at standstill, N, falling linearly to zero at top speed. */
   engineForce: 7400,
-  topSpeed: 30,
+  topSpeed: 34,
   reverseForce: 3200,
   reverseTopSpeed: 9,
   brakeForce: 9000,
   /** Gentle coast-down when nothing is pressed. */
   rollingDrag: 380,
-  airDrag: 0.9,
+  airDrag: 0.45,
 
   /** Front wheel lock at low speed, rad, easing toward `steerHigh` at top speed. */
   steerLow: 0.62,
@@ -51,9 +51,11 @@ export const KART = {
   steerRate: 4.5,
   /** How hard each tyre fights sideways sliding (N per m/s of slip), and its friction cap. */
   lateralGain: 1500,
-  gripMu: 1.75,
+  gripMu: 1.2,
+  /** Grip left once a tyre is sliding well past its limit (fraction of peak). */
+  slideGrip: 0.62,
   /** Rear grip multiplier — slightly under 1 lets the tail step out playfully. */
-  rearGrip: 0.92,
+  rearGrip: 1.15,
 
   /** In the air: target pitch from throttle (nose down) and brake (nose up), rad. */
   airPitchDown: 0.12,
@@ -64,8 +66,22 @@ export const KART = {
   airLevel: 2600,
   airDamp: 620,
 
+  /**
+   * Hitting a barrier hard (closing faster than `bonkSpeed`, m/s) keeps only
+   * `bonkKeep` of the kart's speed and wobbles it — the arcade price of
+   * overcooking a corner. Gentle grazes just scrape.
+   */
+  bonkSpeed: 4,
+  bonkKeep: 0.55,
   /** Seconds upside-down (or stuck) before the kart is set back on its wheels. */
   flipDelay: 1.4,
+} as const;
+
+/** Fording a stream: speed bleeds away and the tyres lose some bite. */
+export const WATER = {
+  /** Fraction of speed lost per second while wheels are in the water. */
+  drag: 1.1,
+  grip: 0.78,
 } as const;
 
 export const ITEMS = {

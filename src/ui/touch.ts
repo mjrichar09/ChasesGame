@@ -1,11 +1,14 @@
 /**
  * Phone controls.
  *
- * Gas is automatic on touch — holding a pedal with a thumb you also need for
- * items is no fun — so the right thumb is free for brake, the banana/item
- * button and the two whack buttons. The left thumb steers by dragging
- * anywhere on the left half of the screen: analogue, centred wherever the
- * thumb first lands, so there is no small target to miss.
+ * The left thumb steers by dragging anywhere on the left half of the screen:
+ * analogue, centred wherever the thumb first lands, so there is no small
+ * target to miss. The right thumb works the pedals — a big GAS button with
+ * BRAKE beside it, since the tracks need braking — and reaches up for the
+ * banana/item button and the two whack buttons.
+ *
+ * Each button tracks its own pointer, so sliding a thumb from GAS onto
+ * BRAKE (or holding gas while tapping an item with another finger) works.
  */
 
 import type { DriverInput } from '../sim/input.js';
@@ -30,10 +33,11 @@ export class TouchControls implements InputSource {
     this.root.innerHTML = `
       <div class="touch-steer"><div class="touch-pad"><div class="touch-knob"></div></div></div>
       <div class="touch-buttons">
-        <button data-b="whackLeft" class="tb tb-whack">🐍◀</button>
+        <button data-b="whackLeft" class="tb tb-whack tb-wl">🐍◀</button>
         <button data-b="item" class="tb tb-item">🍌</button>
-        <button data-b="whackRight" class="tb tb-whack">▶🐍</button>
+        <button data-b="whackRight" class="tb tb-whack tb-wr">▶🐍</button>
         <button data-b="brake" class="tb tb-brake">BRAKE</button>
+        <button data-b="gas" class="tb tb-gas">GAS</button>
       </div>`;
     parent.appendChild(this.root);
     this.knob = this.root.querySelector('.touch-knob')!;
@@ -43,7 +47,7 @@ export class TouchControls implements InputSource {
     zone.addEventListener('pointerdown', (e) => {
       this.steerId = e.pointerId;
       this.steerX0 = e.clientX;
-      zone.setPointerCapture(e.pointerId);
+      capture(zone, e.pointerId);
       this.pad.style.left = `${e.clientX - 60}px`;
       this.pad.style.top = `${e.clientY - 60}px`;
       this.pad.classList.add('on');
@@ -63,18 +67,45 @@ export class TouchControls implements InputSource {
     zone.addEventListener('pointerup', end);
     zone.addEventListener('pointercancel', end);
 
-    for (const btn of this.root.querySelectorAll<HTMLButtonElement>('[data-b]')) {
-      const name = btn.dataset.b!;
-      const set = (v: boolean) => (e: PointerEvent) => {
-        e.preventDefault();
-        this.buttons.set(name, v);
-        btn.classList.toggle('down', v);
-      };
-      btn.addEventListener('pointerdown', set(true));
-      btn.addEventListener('pointerup', set(false));
-      btn.addEventListener('pointercancel', set(false));
-      btn.addEventListener('pointerleave', set(false));
-    }
+    // Pedals and items: a press is whichever button the finger is over, and a
+    // finger can slide between GAS and BRAKE without lifting.
+    const pads = new Map<number, string>();
+    const sync = () => {
+      const held = new Set(pads.values());
+      for (const btn of this.root.querySelectorAll<HTMLButtonElement>('[data-b]')) {
+        const on = held.has(btn.dataset.b!);
+        this.buttons.set(btn.dataset.b!, on);
+        btn.classList.toggle('down', on);
+      }
+    };
+    const box = this.root.querySelector<HTMLDivElement>('.touch-buttons')!;
+    const at = (e: PointerEvent) => {
+      const el = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>('[data-b]');
+      return el && box.contains(el) ? el.dataset.b! : null;
+    };
+    box.addEventListener('pointerdown', (e) => {
+      const name = at(e);
+      if (!name) return;
+      e.preventDefault();
+      pads.set(e.pointerId, name);
+      sync();
+      capture(box, e.pointerId);
+    });
+    box.addEventListener('pointermove', (e) => {
+      if (!pads.has(e.pointerId)) return;
+      const name = at(e);
+      // Only the pedals hand over by sliding; items need a fresh press.
+      const cur = pads.get(e.pointerId)!;
+      if (name && name !== cur && (name === 'gas' || name === 'brake') && (cur === 'gas' || cur === 'brake')) {
+        pads.set(e.pointerId, name);
+        sync();
+      }
+    });
+    const lift = (e: PointerEvent) => {
+      if (pads.delete(e.pointerId)) sync();
+    };
+    box.addEventListener('pointerup', lift);
+    box.addEventListener('pointercancel', lift);
   }
 
   static wanted(): boolean {
@@ -90,12 +121,21 @@ export class TouchControls implements InputSource {
     if (!this.active) return null;
     const b = (n: string) => this.buttons.get(n) ?? false;
     return {
-      throttle: b('brake') ? 0 : 1,
+      throttle: b('gas') ? 1 : 0,
       brake: b('brake') ? 1 : 0,
       steer: this.steer,
       item: b('item'),
       whackLeft: b('whackLeft'),
       whackRight: b('whackRight'),
     };
+  }
+}
+
+/** Keep a finger's moves coming to `el` even when it strays. Best-effort: the press counts either way. */
+function capture(el: Element, pointerId: number): void {
+  try {
+    el.setPointerCapture(pointerId);
+  } catch {
+    // Not a live pointer (synthetic event) — nothing to capture.
   }
 }

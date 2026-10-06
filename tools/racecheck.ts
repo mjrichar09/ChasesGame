@@ -9,7 +9,11 @@ await page.goto(`${process.argv[2] ?? 'http://localhost:5174/'}?laps=1&autopilot
 await page.click('.go');
 await page.click('.select .go');
 await page.waitForSelector('.results', { timeout: 540_000 });
+await page.waitForTimeout(1500);
 await page.screenshot({ path: 'shots/results.png' });
+await page.evaluate(() => { const m = document.querySelector('.menu') as HTMLElement; m.style.opacity = '0'; });
+await page.waitForTimeout(600);
+await page.screenshot({ path: 'shots/podium.png' });
 console.log(await page.locator('.results').innerText());
 console.log('errors:', errors.length ? errors : 'none');
 await browser.close();

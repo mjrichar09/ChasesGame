@@ -94,8 +94,6 @@ export class Controls {
       out.whackLeft ||= t.whackLeft ?? false;
       out.whackRight ||= t.whackRight ?? false;
     }
-    // Brake wins over the touch auto-throttle.
-    if (out.brake > 0.1) out.throttle = Math.min(out.throttle, this.down('KeyW', 'ArrowUp') ? 1 : 0);
     out.throttle = clamp(out.throttle, 0, 1);
     out.brake = clamp(out.brake, 0, 1);
     out.steer = clamp(out.steer, -1, 1);

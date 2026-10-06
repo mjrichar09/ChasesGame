@@ -26,11 +26,24 @@ Playwright. Deploys to GitHub Pages (`.github/workflows/pages.yml`).
 - `npm test` — the gate for every change (determinism, laps, items, full AI race).
 - `npm run telemetry` — headless 8-kart race: lap times, respawns (and why), airtime.
   Run after any physics, track or AI change; respawns should stay low.
-- `npm run trackcheck` — layout sanity for track data (overlaps, tightest corner).
+- `npm run braking` — one kart per track at several corner commitments vs flat-out.
+  Braking must beat flat-out (a test enforces it); re-run after tuning or layout edits.
+- `npm run trackcheck` / `npm run trackmap` — layout sanity (overlaps, inside-edge
+  clearance) and a plan-view PNG per track in `shots/`.
+- `npm run celebrations` — every gorilla's celebration, screenshotted (dev server running).
 - With `npm run dev` running: `npm run shoot`, `npm run shoot:mobile`,
   `npm run racecheck` (full 1-lap autopilot race to the results screen).
   Screenshots land in `shots/`.
 - URL switches for dev: `?laps=1`, `?autopilot`.
+
+## Things that bit us (keep them fixed)
+- Wheel rays ignore barriers and other karts (collision groups in `sim/kart.ts`):
+  raycast wheels standing on logs or karts let karts climb barriers and stack.
+- Each kart has an invisible skirt collider (karts only) under its high chassis,
+  so pile-ups push apart instead of riding up on each other.
+- The track builder relaxes any corner tighter than half the road width + 2.5 m;
+  sharper and the inside edge folds and barrier boxes poke across the road.
+- Tracks live in `src/data/tracks/` (`index.ts` lists them, `looks.ts` styles them).
 
 ## Conventions
 - Every source file opens with a comment saying why it exists.

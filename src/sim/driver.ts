@@ -14,6 +14,9 @@
  */
 
 import { KART } from '../data/tuning.js';
+
+/** Deceleration the AI plans its braking around, m/s². */
+const BRAKE_DECEL = 17;
 import type { DriverInput } from './input.js';
 import type { Items } from './items.js';
 import type { Kart } from './kart.js';
@@ -45,7 +48,7 @@ export function personality(rng: Rng, index: number): Personality {
     phase: rng.range(0, Math.PI * 2),
     // A spread so the field strings out rather than running as one blob.
     skill: 0.9 + 0.1 * ((index * 0.37) % 1),
-    cornerGrip: rng.range(17, 22),
+    cornerGrip: rng.range(17, 23),
     patience: rng.range(0.4, 2.5),
   };
 }
@@ -85,16 +88,22 @@ export class AiDriver {
     }
     kart.power = me.skill * band;
 
-    // Curvature ahead decides speed; a gap ahead overrides it.
-    const reach = 12 + Math.max(0, speed) * 1.4;
+    // Speed: for every corner ahead, the fastest we could be going *now* and
+    // still brake down to its cornering speed in the distance left
+    // (v² = v_corner² + 2·a·d). Brake late and hard, like a good driver.
+    // A gap ahead overrides it — never arrive at the river slow.
+    const reach = 18 + Math.max(0, speed) * 2.2;
     let maxK = 0;
     let gapAhead = false;
-    for (let d = 4; d <= reach; d += 3) {
+    let cornerSpeed = Infinity;
+    for (let d = 2; d <= reach; d += 2) {
       const k = track.at(pr.s + d);
-      maxK = Math.max(maxK, Math.abs(k.curvature));
+      const curv = Math.abs(k.curvature);
+      if (d < 40) maxK = Math.max(maxK, curv);
       if (!k.road || track.inGap(pr.s + d + 10)) gapAhead = true;
+      const vCorner = Math.sqrt(me.cornerGrip / Math.max(curv, 1e-4));
+      cornerSpeed = Math.min(cornerSpeed, Math.sqrt(vCorner * vCorner + 2 * BRAKE_DECEL * Math.max(0, d - 3)));
     }
-    const cornerSpeed = Math.sqrt(me.cornerGrip / Math.max(maxK, 1e-4));
 
     // Lane: personal offset, a weave, and a cut to the inside of the corner.
     const here = track.at(pr.s + 10);
@@ -133,7 +142,9 @@ export class AiDriver {
       throttle = 0;
       brake = 1;
       steer = -steer;
-    } else if (Math.abs(speed) < 1.5 && !kart.spinning) {
+    } else if (Math.abs(speed) < 1.5 && !kart.spinning && kart.applied.throttle > 0.5) {
+      // (Only while the kart was actually driving — during the countdown it
+      // is held still, and counting that made the whole grid reverse at GO.)
       this.blocked += dt;
       if (this.blocked > 0.7) {
         this.blocked = 0;

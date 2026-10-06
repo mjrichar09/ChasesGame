@@ -13,7 +13,7 @@
  */
 
 import type RAPIER from '@dimforge/rapier3d-compat';
-import { ITEMS, KART, SIM } from '../data/tuning.js';
+import { ITEMS, KART, SIM, WATER } from '../data/tuning.js';
 import type { DriverInput } from './input.js';
 import { NEUTRAL_INPUT } from './input.js';
 import {
@@ -33,6 +33,32 @@ import {
 } from './math.js';
 
 export type ItemKind = 'none' | 'banana' | 'snake';
+
+/**
+ * Collision groups (Rapier packs membership in the high 16 bits, filter in
+ * the low 16; two colliders touch only if each one's membership is in the
+ * other's filter).
+ *
+ * - ground (road, floor, ramps): what wheels stand on.
+ * - barriers: wheel rays ignore them — a raycast wheel that can stand on a
+ *   log lets its spring lift the kart up and over, which is how slow karts
+ *   were escaping the track.
+ * - kart chassis: wheel rays ignore them too, or karts stack and ride piggyback.
+ * - kart skirt: an invisible box filling the space under the chassis down to
+ *   the wheels, touching only other karts. Long-travel suspension leaves the
+ *   chassis 0.6 m in the air, and without this, karts in a pile-up slid on top
+ *   of each other with their wheels in the air and never got out.
+ */
+const G_GROUND = 0x0001;
+const G_BARRIER = 0x0002;
+const G_KART = 0x0004;
+const G_SKIRT = 0x0008;
+const groups = (member: number, filter: number) => (member << 16) | filter;
+export const GROUND_GROUPS = groups(G_GROUND, 0xffff);
+export const BARRIER_GROUPS = groups(G_BARRIER, 0xffff);
+const KART_GROUPS = groups(G_KART, 0xffff);
+const SKIRT_GROUPS = groups(G_SKIRT, G_KART | G_SKIRT);
+const WHEEL_RAY_GROUPS = groups(0xffff, 0xffff & ~(G_BARRIER | G_KART | G_SKIRT));
 
 export interface WheelState {
   /** Mount point in chassis coordinates. */
@@ -73,6 +99,8 @@ export class Kart {
   airTime = 0;
   /** Downward speed at the last touchdown, m/s — the size of the landing. */
   lastLanding = 0;
+  /** Set by the race each step while the kart is fording a stream. */
+  wet = false;
   /** Engine and top-speed multiplier: AI skill and rubber-banding. 1 for players. */
   power = 1;
   private wasAirborne = false;
@@ -94,7 +122,21 @@ export class Kart {
     const h = KART.half;
     // Density 0; mass and a low centre of mass are set explicitly.
     this.collider = world.createCollider(
-      rapier.ColliderDesc.cuboid(h.x, h.y, h.z).setDensity(0).setFriction(0.4).setRestitution(0.3),
+      rapier.ColliderDesc.cuboid(h.x, h.y, h.z)
+        .setDensity(0)
+        .setFriction(0.4)
+        .setRestitution(0.3)
+        .setCollisionGroups(KART_GROUPS),
+      this.body,
+    );
+    const skirtHalf = 0.42;
+    world.createCollider(
+      rapier.ColliderDesc.cuboid(h.x, skirtHalf, h.z)
+        .setTranslation(0, -h.y - skirtHalf, 0)
+        .setDensity(0)
+        .setFriction(0.2)
+        .setRestitution(0.3)
+        .setCollisionGroups(SKIRT_GROUPS),
       this.body,
     );
     const m = KART.mass;
@@ -236,7 +278,7 @@ export class Kart {
       const mount = add(pos, rotate(q, w.local));
       const dir = scale(up, -1);
       const ray = new this.rapier.Ray(mount, dir);
-      const hit = this.world.castRayAndGetNormal(ray, rayLen, true, undefined, undefined, undefined, body);
+      const hit = this.world.castRayAndGetNormal(ray, rayLen, true, undefined, WHEEL_RAY_GROUPS, undefined, body);
       const prev = w.compression;
       if (!hit) {
         w.contact = false;
@@ -285,8 +327,16 @@ export class Kart {
       w.spin += (vLong / KART.wheelRadius) * dt;
 
       const load = Math.max(c.load, staticLoad * 0.35);
-      const grip = KART.gripMu * load * (w.front ? 1 : KART.rearGrip) * (spinning ? 0.25 : 1);
-      const lat = clamp(-vLat * KART.lateralGain, -grip, grip);
+      const grip =
+        KART.gripMu * load * (w.front ? 1 : KART.rearGrip) * (spinning ? 0.25 : 1) * (this.wet ? WATER.grip : 1);
+      // A tyre that has broken away grips less than one that hasn't: past the
+      // limit the force falls toward `slideGrip`. That is what makes a corner
+      // taken too fast run wide into the logs instead of scrubbing off speed
+      // for free — and so what makes braking worth it.
+      const want = -vLat * KART.lateralGain;
+      const over = Math.abs(want) / Math.max(grip, 1e-6);
+      const slideCap = over > 1 ? grip * lerp(1, KART.slideGrip, clamp((over - 1) / 1.5, 0, 1)) : grip;
+      const lat = clamp(want, -slideCap, slideCap);
 
       let lon = 0;
       if (input.throttle > 0) {
@@ -306,6 +356,11 @@ export class Kart {
       // Forces act a little above the contact, at the axle — less roll-over.
       const at = add(c.point, scale(n, KART.wheelRadius));
       body.applyImpulseAtPoint(scale(add(scale(side, lat), scale(along, lon)), dt), at, true);
+    }
+
+    // Wading: the stream pulls speed off in proportion to it.
+    if (this.wet && grounded > 0) {
+      body.applyImpulse(scale(v3(vel.x, 0, vel.z), -mass * WATER.drag * dt), true);
     }
 
     // Air drag.

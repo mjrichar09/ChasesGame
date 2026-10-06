@@ -6,6 +6,8 @@
  */
 
 export type Accessory = 'crown' | 'bandana' | 'goggles' | 'hardhat' | 'flower' | 'shades' | 'headphones' | 'none';
+/** Each gorilla's signature celebration (see render/celebrate.ts). */
+export type Celebration = 'chestPound' | 'windmill' | 'clap' | 'wave' | 'jump' | 'scratch' | 'fingerGuns' | 'flex';
 export type KartStyle = 'logRaft' | 'barrel' | 'crate' | 'bamboo' | 'canoe' | 'tire' | 'bathtub' | 'stone';
 
 export interface Gorilla {
@@ -25,6 +27,7 @@ export interface Gorilla {
   /** Main accessory colour. */
   accent: number;
   kart: KartStyle;
+  celebration: Celebration;
   /** Kart paint / trim. */
   kartColor: number;
   kartTrim: number;
@@ -44,6 +47,7 @@ export const GORILLAS: readonly Gorilla[] = [
     accessory: 'crown',
     accent: 0xf2c14e,
     kart: 'logRaft',
+    celebration: 'chestPound',
     kartColor: 0x8a5a33,
     kartTrim: 0x5b8c3a,
   },
@@ -60,6 +64,7 @@ export const GORILLAS: readonly Gorilla[] = [
     accessory: 'bandana',
     accent: 0xe0412f,
     kart: 'barrel',
+    celebration: 'windmill',
     kartColor: 0xa0642d,
     kartTrim: 0x2f2f33,
   },
@@ -76,6 +81,7 @@ export const GORILLAS: readonly Gorilla[] = [
     accessory: 'goggles',
     accent: 0x58b6c9,
     kart: 'crate',
+    celebration: 'clap',
     kartColor: 0xc9a06a,
     kartTrim: 0x3c6e9e,
   },
@@ -92,6 +98,7 @@ export const GORILLAS: readonly Gorilla[] = [
     accessory: 'flower',
     accent: 0xff7fb0,
     kart: 'bathtub',
+    celebration: 'wave',
     kartColor: 0xf3efe6,
     kartTrim: 0xf29f3c,
   },
@@ -108,6 +115,7 @@ export const GORILLAS: readonly Gorilla[] = [
     accessory: 'hardhat',
     accent: 0xffcc1f,
     kart: 'tire',
+    celebration: 'jump',
     kartColor: 0x2b2b2e,
     kartTrim: 0xffcc1f,
   },
@@ -124,6 +132,7 @@ export const GORILLAS: readonly Gorilla[] = [
     accessory: 'headphones',
     accent: 0x9b5cf6,
     kart: 'canoe',
+    celebration: 'scratch',
     kartColor: 0x2d8f7b,
     kartTrim: 0xf7e04b,
   },
@@ -140,6 +149,7 @@ export const GORILLAS: readonly Gorilla[] = [
     accessory: 'shades',
     accent: 0x1b1b1f,
     kart: 'bamboo',
+    celebration: 'fingerGuns',
     kartColor: 0xb7c65a,
     kartTrim: 0x7a4b2a,
   },
@@ -156,6 +166,7 @@ export const GORILLAS: readonly Gorilla[] = [
     accessory: 'none',
     accent: 0x8f8a80,
     kart: 'stone',
+    celebration: 'flex',
     kartColor: 0x9a968c,
     kartTrim: 0x6b8f4e,
   },

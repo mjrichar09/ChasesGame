@@ -41,9 +41,10 @@ export type ItemEvent =
   | { type: 'pickup'; kart: number; kind: Exclude<ItemKind, 'none'>; pos: Vec3 }
   | { type: 'boost'; kart: number; pos: Vec3 }
   | { type: 'peelDrop'; kart: number; pos: Vec3 }
-  | { type: 'peelHit'; kart: number; pos: Vec3 }
+  | { type: 'peelHit'; kart: number; owner: number; pos: Vec3 }
   | { type: 'swing'; kart: number; side: -1 | 1; pos: Vec3 }
-  | { type: 'whack'; kart: number; victim: number; pos: Vec3 };
+  | { type: 'whack'; kart: number; victim: number; pos: Vec3 }
+  | { type: 'bonk'; kart: number; pos: Vec3; strength: number };
 
 const rising = (now: boolean, before: boolean) => now && !before;
 
@@ -203,7 +204,7 @@ export class Items {
       if (Math.abs(d.y) > 1.6 || d.x * d.x + d.z * d.z > r2) continue;
       this.peels.splice(i, 1);
       this.spinOut(kart);
-      this.events.push({ type: 'peelHit', kart: kart.index, pos: peel.pos });
+      this.events.push({ type: 'peelHit', kart: kart.index, owner: peel.owner, pos: peel.pos });
       return;
     }
   }

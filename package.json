@@ -14,7 +14,10 @@
     "shoot:mobile": "tsx tools/shoot.ts --mobile",
     "racecheck": "tsx tools/racecheck.ts",
     "trackcheck": "tsx tools/trackcheck.ts",
-    "trace": "tsx tools/trace.ts"
+    "trace": "tsx tools/trace.ts",
+    "braking": "tsx tools/braking.ts",
+    "trackmap": "tsx tools/trackmap.ts",
+    "celebrations": "tsx tools/celebrations.ts"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.14.0",
