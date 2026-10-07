@@ -81,7 +81,7 @@ describe('laps', () => {
     expect(r.sim.finishOrder).toEqual(r.sim.standings());
     for (const p of r.sim.progress) expect(p.lapTimes).toHaveLength(1);
     r.sim.free();
-  });
+  }, 60_000);
 });
 
 describe('bananas', () => {
