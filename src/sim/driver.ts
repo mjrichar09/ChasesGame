@@ -13,7 +13,7 @@
  * without the leader feeling robbed.
  */
 
-import { KART } from '../data/tuning.js';
+import { KART, PARROT } from '../data/tuning.js';
 
 /** Deceleration the AI plans its braking around, m/s². */
 const BRAKE_DECEL = 17;
@@ -79,6 +79,7 @@ export class AiDriver {
     const fwd = kart.forward;
     const right = kart.right;
     const speed = kart.forwardSpeed;
+    if (kart.flying) return this.fly(kart, pr, track);
 
     // Rubber-band against the best human, when there is one.
     let band = 1;
@@ -154,8 +155,24 @@ export class AiDriver {
       this.blocked = 0;
     }
 
-    const use = this.items(dt, kart, maxK, gapAhead, karts, items);
+    const use = this.items(dt, kart, maxK, gapAhead, karts, items, pr, track);
     return { throttle, brake, steer, ...use };
+  }
+
+  /**
+   * On the parrot: aim straight at the furthest point down the lap that the
+   * remaining flight can reach, so the AI cuts across the infield.
+   */
+  private fly(kart: Kart, pr: Progress, track: Track): DriverInput {
+    const pos = kart.position;
+    const reach = Math.max(0, kart.flyTime - 0.4) * PARROT.speed * 0.9;
+    const best = shortcut(pos, pr.s, track, reach);
+    const target = track.pointAt(pr.s + best, 0);
+    const rel = sub(target, pos);
+    const x = dot(rel, kart.right);
+    const z = dot(rel, kart.forward);
+    const steer = clamp(Math.atan2(x, Math.max(z, 0.1)) * 1.6, -1, 1);
+    return { throttle: 1, brake: 0, steer, item: false, whackLeft: false, whackRight: false };
   }
 
   /** Shift the lane away from any peel lying near it in the next stretch. */
@@ -176,6 +193,8 @@ export class AiDriver {
     gapAhead: boolean,
     karts: readonly Kart[],
     items: Items,
+    pr: Progress,
+    track: Track,
   ): Pick<DriverInput, 'item' | 'whackLeft' | 'whackRight'> {
     const none = { item: false, whackLeft: false, whackRight: false };
     // Buttons have to be released between presses — the sim acts on rising edges.
@@ -188,9 +207,22 @@ export class AiDriver {
       return none;
     }
     this.holding += dt;
+    if (kart.item === 'parrot') {
+      // Worth it when a flight would cover far more lap than it flies — a
+      // shortcut — or once it has been held a while anyway.
+      const reach = (PARROT.time - 0.6) * PARROT.speed * 0.9;
+      const skip = shortcut(kart.position, pr.s, track, reach);
+      if (this.holding > this.me.patience && (skip > reach * 1.4 || this.holding > 8)) {
+        this.pressed = true;
+        this.holding = 0;
+        return { ...none, item: true };
+      }
+      return none;
+    }
     if (kart.item === 'banana') {
       const straight = maxK < 0.012;
-      if (this.holding > this.me.patience && (straight || gapAhead) && !kart.boosting) {
+      // Never into a gap: a boosted kart overshoots the landing.
+      if (this.holding > this.me.patience && straight && !gapAhead && !kart.boosting) {
         this.pressed = true;
         this.holding = 0;
         return { ...none, item: true };
@@ -206,4 +238,19 @@ export class AiDriver {
     if (left && (!right || left.d < right.d)) return { ...none, whackLeft: true };
     return { ...none, whackRight: true };
   }
+}
+
+/**
+ * The furthest distance down the lap (m) whose road point lies within `reach`
+ * metres in a straight line — where a parrot flight can get to.
+ */
+export function shortcut(pos: { x: number; z: number }, s: number, track: Track, reach: number): number {
+  let best = 30;
+  const limit = track.length * PARROT.maxSkip * 0.9;
+  for (let d = 30; d <= limit; d += 8) {
+    const k = track.at(s + d);
+    if (!k.road) continue;
+    if (Math.hypot(k.p.x - pos.x, k.p.z - pos.z) <= reach) best = d;
+  }
+  return best;
 }

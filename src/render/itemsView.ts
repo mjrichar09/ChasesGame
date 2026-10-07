@@ -11,6 +11,7 @@
 import * as THREE from 'three';
 import type { Items } from '../sim/items.js';
 import { buildSnake } from './kartView.js';
+import { buildPerchedParrot } from './parrot.js';
 import { GEO, PartBuilder, toon } from './toon.js';
 
 function bananaBunch(): THREE.Group {
@@ -130,8 +131,10 @@ interface PickupView {
   root: THREE.Group;
   banana: THREE.Group;
   snake: THREE.Group;
+  parrot: THREE.Group;
   ring: THREE.Group;
   ringSnake: THREE.Group;
+  ringParrot: THREE.Group;
   phase: number;
 }
 
@@ -147,32 +150,31 @@ export class ItemsView {
       root.position.set(p.pos.x, p.pos.y - 1.1, p.pos.z);
       const banana = bananaBunch();
       const snake = coiledSnake();
+      const parrot = buildPerchedParrot();
       const ring = glowRing(0xffe14d);
       const ringSnake = glowRing(0x7dff6a);
-      for (const o of [banana, snake]) o.position.y = 1.2;
-      root.add(banana, snake, ring, ringSnake);
+      const ringParrot = glowRing(0x4dd2ff);
+      for (const o of [banana, snake, parrot]) o.position.y = 1.2;
+      root.add(banana, snake, parrot, ring, ringSnake, ringParrot);
       this.group.add(root);
-      this.pickups.push({ root, banana, snake, ring, ringSnake, phase: i * 1.7 });
+      this.pickups.push({ root, banana, snake, parrot, ring, ringSnake, ringParrot, phase: i * 1.7 });
     });
   }
 
   update(items: Items, time: number): void {
     items.pickups.forEach((p, i) => {
       const v = this.pickups[i]!;
-      const isBanana = p.kind === 'banana';
       v.root.visible = p.active;
-      v.banana.visible = isBanana;
-      v.snake.visible = !isBanana;
-      v.ring.visible = isBanana;
-      v.ringSnake.visible = !isBanana;
+      v.banana.visible = v.ring.visible = p.kind === 'banana';
+      v.snake.visible = v.ringSnake.visible = p.kind === 'snake';
+      v.parrot.visible = v.ringParrot.visible = p.kind === 'parrot';
       const bob = Math.sin(time * 2.4 + v.phase) * 0.18;
-      for (const o of [v.banana, v.snake]) {
+      for (const o of [v.banana, v.snake, v.parrot]) {
         o.position.y = 1.25 + bob;
         o.rotation.y = time * 1.8 + v.phase;
       }
       const pulse = 1 + Math.sin(time * 4 + v.phase) * 0.08;
-      v.ring.scale.setScalar(pulse);
-      v.ringSnake.scale.setScalar(pulse);
+      for (const r of [v.ring, v.ringSnake, v.ringParrot]) r.scale.setScalar(pulse);
     });
 
     // Peels: add new, drop gone.

@@ -13,7 +13,7 @@
  */
 
 import RAPIER from '@dimforge/rapier3d-compat';
-import { KART, RACE, SIM } from '../data/tuning.js';
+import { KART, PARROT, RACE, SIM } from '../data/tuning.js';
 import { type DriverInput, NEUTRAL_INPUT } from './input.js';
 import { Items } from './items.js';
 import { BARRIER_GROUPS, GROUND_GROUPS, Kart, yawQuat } from './kart.js';
@@ -47,6 +47,8 @@ export interface Progress {
   /** Seconds left of respawn grace. */
   grace: number;
   respawns: number;
+  /** Lap distance when the current parrot flight began (null when not flying). */
+  flightStart: number | null;
   /** Seconds before another wall bonk can register. */
   bonkCooldown: number;
   /** Why the last respawn happened — for tuning and tests. */
@@ -105,6 +107,7 @@ export class RaceSim {
         grace: 0,
         respawns: 0,
         bonkCooldown: 0,
+        flightStart: null,
         lastRespawn: null,
         lapTimes: [],
       });
@@ -192,7 +195,9 @@ export class RaceSim {
 
     for (const kart of this.karts) {
       const pr = this.progress[kart.index]!;
-      kart.wet = this.track.inWater(pr.s) && Math.abs(pr.lateral) < this.track.at(pr.s).halfWidth + 4;
+      kart.wet = !kart.flying && this.track.inWater(pr.s) && Math.abs(pr.lateral) < this.track.at(pr.s).halfWidth + 4;
+      // The parrot holds its height over the road below (never below take-off).
+      if (kart.flying) kart.flyTargetY = Math.max(kart.flyBaseY, this.track.at(pr.s).p.y) + PARROT.altitude;
     }
     this.items.step(dt, this.karts, held, live);
     for (const kart of this.karts) kart.step(dt, held[kart.index]!);
@@ -204,7 +209,22 @@ export class RaceSim {
   private track1(kart: Kart, input: DriverInput): void {
     const pr = this.progress[kart.index]!;
     const pos = kart.position;
-    const p = this.track.project(pos, pr.s);
+    let p = this.track.project(pos, pr.s);
+    // In and just after a parrot flight the kart may be anywhere — that is
+    // the point of it — so search the whole lap and accept a shortcut (a
+    // forward jump of up to `maxSkip` of a lap; never a lap's worth).
+    // One flight is worth at most `maxSkip` of a lap however it is flown.
+    const airborne = kart.flying || kart.sinceFlight < PARROT.landGrace;
+    if (kart.flying && pr.flightStart === null) pr.flightStart = pr.dist;
+    if (!airborne) pr.flightStart = null;
+    if (airborne) {
+      const g = this.track.project(pos, -1);
+      const jump = this.track.delta(pr.s, g.s);
+      const cap = (pr.flightStart ?? pr.dist) + this.track.length * PARROT.maxSkip;
+      const localOff = Math.abs(p.lateral) - this.track.at(p.s).halfWidth;
+      const globalOff = Math.abs(g.lateral) - this.track.at(g.s).halfWidth;
+      if (g.s !== p.s && globalOff < localOff - 1 && jump > -20 && pr.dist + jump <= cap) p = g;
+    }
     const d = this.track.delta(pr.s, p.s);
     pr.dist += d;
     pr.s = p.s;
@@ -226,6 +246,14 @@ export class RaceSim {
     this.bonk(kart, pr, sample, p.lateral);
     const onRoad = sample.road && Math.abs(p.lateral) < sample.halfWidth + 1;
     if (onRoad && kart.grounded >= 2 && !this.nearGap(p.s)) pr.safeS = p.s;
+    // While flying, the nearest road under the kart is where it would respawn
+    // — a bad landing costs the landing, not the shortcut.
+    if (kart.flying && sample.road && !this.nearGap(p.s) && Math.abs(p.lateral) < sample.halfWidth + 25) pr.safeS = p.s;
+    if (kart.flying) {
+      pr.offTrack = 0;
+      pr.stuck = 0;
+      return;
+    }
 
     // Fell in the river, off an edge, or out of the world.
     const fell = pos.y < sample.p.y - (sample.road ? 4 : 2.5) || pos.y < -3;
@@ -252,7 +280,8 @@ export class RaceSim {
    */
   private bonk(kart: Kart, pr: Progress, sample: ReturnType<Track['at']>, lateral: number): void {
     pr.bonkCooldown = Math.max(0, pr.bonkCooldown - this.dt);
-    if (pr.bonkCooldown > 0 || !sample.road || this.track.inWater(pr.s)) return;
+    // Only a kart on its wheels can bonk — not one flying or jumping over the logs.
+    if (pr.bonkCooldown > 0 || !sample.road || this.track.inWater(pr.s) || kart.grounded === 0) return;
     const side = Math.sign(lateral);
     if (Math.abs(lateral) < sample.halfWidth - KART.half.x - 0.35) return;
     const v = kart.velocity;

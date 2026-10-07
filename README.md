@@ -9,6 +9,7 @@ slide into the logs.
 
 - **Vine Valley** — sunny and fast, with a river gap to clear.
 - **Canopy Creek** — deep under a full jungle canopy; tight turns and a creek to ford twice.
+- **Treetop Tangle** — thirty metres up along giant branches; tree-to-tree leaps and no railing on the bare stretches.
 
 ## Play
 ```
@@ -28,6 +29,8 @@ npm run dev        # http://localhost:5174
 - **Banana bunch** (floats over a yellow ring): three bananas. Each is a 3 s
   boost and drops a peel behind you. Peels stay until someone hits one.
 - **Snake** (green ring): three swings, left or right, at whoever is alongside.
+- **Parrot** (blue ring): a giant macaw carries you for 6 s. Steer and set the pace;
+  fly over peels and snakes, or cut straight across the infield to a later part of the lap.
 - One item at a time — a full hand drives straight through pickups.
 
 Every gorilla has their own celebration: on the select screen, on the

@@ -24,6 +24,7 @@ export class Hud {
   private readonly time: HTMLElement;
   private readonly item: HTMLElement;
   private readonly pips: HTMLElement;
+  private readonly flight: HTMLElement;
   private readonly speed: HTMLElement;
   private readonly center: HTMLElement;
   private readonly callout: HTMLElement;
@@ -46,6 +47,7 @@ export class Hud {
       <div class="hud-tr">
         <div class="hud-item"><span class="icon"></span></div>
         <div class="hud-pips"></div>
+        <div class="hud-flight"><i></i></div>
       </div>
       <canvas class="hud-map" width="180" height="180"></canvas>
       <div class="hud-speed"><span>0</span> km/h</div>
@@ -58,6 +60,7 @@ export class Hud {
     this.time = q('.hud-time');
     this.item = q('.hud-item');
     this.pips = q('.hud-pips');
+    this.flight = q('.hud-flight');
     this.speed = q('.hud-speed span');
     this.center = q('.hud-center');
     this.callout = q('.hud-callout');
@@ -123,9 +126,18 @@ export class Hud {
     if (key !== this.lastItem) {
       this.lastItem = key;
       this.item.dataset.kind = kart.item;
-      this.item.querySelector('.icon')!.textContent = kart.item === 'banana' ? '🍌' : kart.item === 'snake' ? '🐍' : '';
+      this.item.querySelector('.icon')!.textContent =
+        kart.item === 'banana' ? '🍌' : kart.item === 'snake' ? '🐍' : kart.item === 'parrot' ? '🦜' : '';
       this.pips.innerHTML = '<i></i>'.repeat(kart.item === 'none' ? 0 : kart.charges);
       if (kart.item !== 'none') this.item.classList.remove('pop'), void this.item.offsetWidth, this.item.classList.add('pop');
+    }
+
+    // Flight time left, as a draining bar under the item slot.
+    this.flight.style.display = kart.flying ? '' : 'none';
+    if (kart.flying) {
+      const bar = this.flight.querySelector('i') as HTMLElement;
+      bar.style.width = `${Math.max(0, (kart.flyTime / 6) * 100)}%`;
+      this.flight.classList.toggle('low', kart.flyTime < 1);
     }
 
     // Countdown.

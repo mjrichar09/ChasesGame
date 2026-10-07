@@ -29,6 +29,8 @@ export class ChaseCam {
   private shake = 0;
   private time = 0;
   private placed = false;
+  /** 0..1 blend toward the flying framing. */
+  private fly = 0;
 
   constructor(aspect: number) {
     this.camera = new THREE.PerspectiveCamera(BASE_FOV, aspect, 0.1, 900);
@@ -47,7 +49,7 @@ export class ChaseCam {
     dt: number,
     target: THREE.Vector3,
     rot: THREE.Quaternion,
-    opts: { boosting: boolean; spinning: boolean; speed: number; track: Track; s: number },
+    opts: { boosting: boolean; spinning: boolean; flying: boolean; speed: number; track: Track; s: number },
   ): void {
     this.time += dt;
     const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(rot);
@@ -59,10 +61,11 @@ export class ChaseCam {
       this.yaw += d * (1 - Math.exp(-5.5 * dt));
     }
     const flat = new THREE.Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
-    // Pull back a touch with speed.
-    const dist = DIST + Math.min(opts.speed, 35) * 0.04;
+    // Pull back a touch with speed — and a lot on the parrot, to see where to go.
+    this.fly += ((opts.flying ? 1 : 0) - this.fly) * (1 - Math.exp(-2.5 * dt));
+    const dist = DIST + Math.min(opts.speed, 35) * 0.04 + this.fly * 4;
     const want = target.clone().addScaledVector(flat, -dist);
-    want.y += HEIGHT;
+    want.y += HEIGHT + this.fly * 3.5;
 
     // Never below the road (or the ground) where the camera is.
     const roadHere = opts.track.project({ x: want.x, y: want.y, z: want.z }, opts.s);

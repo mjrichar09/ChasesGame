@@ -30,6 +30,14 @@ export interface TrackLook {
   stream?: { x: number; z: number }[];
   /** Multiplier on the scenery counts. */
   scenery: number;
+  /** Road surface: packed dirt, or the bark deck of a branch. */
+  road: 'dirt' | 'bark';
+  /** Barriers: logs, or vine ropes on posts. */
+  barrier: 'logs' | 'vines';
+  /** Water under the road gaps (a river), or nothing (a long drop). */
+  riverUnderGaps: boolean;
+  /** Branches under the road, giant trees, and a sea of treetops below. */
+  branches: boolean;
 }
 
 export const LOOKS: Record<string, TrackLook> = {
@@ -49,6 +57,10 @@ export const LOOKS: Record<string, TrackLook> = {
     canopy: false,
     vineArches: true,
     scenery: 1,
+    road: 'dirt',
+    barrier: 'logs',
+    riverUnderGaps: true,
+    branches: false,
   },
   'canopy-creek': {
     blurb: 'Deep under the canopy. Tight turns, a creek to ford.',
@@ -67,5 +79,30 @@ export const LOOKS: Record<string, TrackLook> = {
     vineArches: false,
     stream: CANOPY_STREAM,
     scenery: 1.2,
+    road: 'dirt',
+    barrier: 'logs',
+    riverUnderGaps: true,
+    branches: false,
+  },
+  'treetop-tangle': {
+    blurb: 'Thirty metres up, along the branches. Mind the drop.',
+    skyTop: 0x3f9fe0,
+    skyHorizon: 0xe2f4f2,
+    fog: 0xcfe9ea,
+    fogNear: 90,
+    fogFar: 420,
+    hemiSky: 0xfff6dc,
+    hemiGround: 0x4f7a34,
+    hemiIntensity: 1.35,
+    sun: 0xfff0c8,
+    sunIntensity: 2.3,
+    ground: '#2a4f22',
+    canopy: false,
+    vineArches: false,
+    scenery: 0,
+    road: 'bark',
+    barrier: 'vines',
+    riverUnderGaps: false,
+    branches: true,
   },
 };

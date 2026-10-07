@@ -13,7 +13,7 @@
  */
 
 import type RAPIER from '@dimforge/rapier3d-compat';
-import { ITEMS, KART, SIM, WATER } from '../data/tuning.js';
+import { ITEMS, KART, PARROT, SIM, WATER } from '../data/tuning.js';
 import type { DriverInput } from './input.js';
 import { NEUTRAL_INPUT } from './input.js';
 import {
@@ -32,7 +32,7 @@ import {
   v3,
 } from './math.js';
 
-export type ItemKind = 'none' | 'banana' | 'snake';
+export type ItemKind = 'none' | 'banana' | 'snake' | 'parrot';
 
 /**
  * Collision groups (Rapier packs membership in the high 16 bits, filter in
@@ -99,6 +99,14 @@ export class Kart {
   airTime = 0;
   /** Downward speed at the last touchdown, m/s — the size of the landing. */
   lastLanding = 0;
+  /** Parrot flight: seconds left, seconds since take-off, and the height it holds (set by the race). */
+  flyTime = 0;
+  flyElapsed = 0;
+  flyTargetY = 0;
+  /** Road height where the flight started — the parrot never dips below it. */
+  flyBaseY = 0;
+  /** Seconds since the parrot let go (large when it never has). */
+  sinceFlight = 1e9;
   /** Set by the race each step while the kart is fording a stream. */
   wet = false;
   /** Engine and top-speed multiplier: AI skill and rubber-banding. 1 for players. */
@@ -207,6 +215,19 @@ export class Kart {
     return this.spinTime > 0;
   }
 
+  get flying(): boolean {
+    return this.flyTime > 0;
+  }
+
+  /** The parrot grabs the kart. */
+  takeOff(baseY: number): void {
+    this.flyTime = PARROT.time;
+    this.flyElapsed = 0;
+    this.flyBaseY = baseY;
+    this.spinTime = 0;
+    this.wobbleTime = 0;
+  }
+
   /** Put the kart down at rest, e.g. at the grid or after a respawn. */
   place(pos: Vec3, rot: Quat): void {
     this.body.setTranslation(pos, true);
@@ -216,6 +237,7 @@ export class Kart {
     this.spinTime = 0;
     this.wobbleTime = 0;
     this.upsideTime = 0;
+    this.flyTime = 0;
     for (const w of this.wheels) w.compression = 0;
   }
 
@@ -249,6 +271,13 @@ export class Kart {
     if (this.swingSide !== 0) {
       this.swingTime += dt;
       if (this.swingTime > ITEMS.swingTime) this.swingSide = 0;
+    }
+
+    this.sinceFlight += dt;
+    if (this.flyTime > 0) {
+      this.fly(dt, input);
+      this.prevInput = { ...raw };
+      return;
     }
 
     const body = this.body;
@@ -381,6 +410,48 @@ export class Kart {
   }
 
   /**
+   * Parrot flight. Arcade control rather than forces: the parrot sets the
+   * kart's heading, pace and height directly, eased so it still swoops. The
+   * body stays dynamic, so it can still bump into trunks and other karts.
+   */
+  private fly(dt: number, input: DriverInput): void {
+    this.flyElapsed += dt;
+    this.flyTime -= dt;
+    this.steerAngle = moveToward(this.steerAngle, 0, KART.steerRate * dt);
+    for (const w of this.wheels) {
+      w.contact = false;
+      w.compression = moveToward(w.compression, 0, dt * 3);
+    }
+    this.airTime = 0;
+    this.wasAirborne = true;
+    const body = this.body;
+    const vel = body.linvel();
+    const f = this.forward;
+    let yaw = Math.atan2(f.x, f.z);
+    yaw += -input.steer * PARROT.turnRate * dt;
+    const pace = PARROT.speed * (PARROT.coast + (1 - PARROT.coast) * input.throttle) * (1 - (1 - PARROT.brake) * input.brake);
+    const h = Math.hypot(vel.x, vel.z);
+    const hNew = moveToward(h, pace, PARROT.accel * dt);
+    // Height: climb to the target; sag as the parrot tires, then let go.
+    let target = this.flyTargetY;
+    if (this.flyTime < PARROT.sag) target -= (1 - this.flyTime / PARROT.sag) * 3;
+    const lift = Math.min(1, this.flyElapsed / 0.6);
+    const vyWant = clamp((target - this.position.y) * PARROT.climb, -PARROT.maxClimb, PARROT.maxClimb) * lift;
+    const vy = vel.y + (vyWant - vel.y) * Math.min(1, dt * 5);
+    body.setLinvel(v3(Math.sin(yaw) * hNew, vy + SIM.gravity * dt, Math.cos(yaw) * hNew), true);
+    // Hang level under the parrot, banking into turns.
+    const bank = -input.steer * 0.35;
+    const qYaw = { x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) };
+    const qBank = { x: 0, y: 0, z: Math.sin(bank / 2), w: Math.cos(bank / 2) };
+    body.setRotation(mulQuat(qYaw, qBank), true);
+    body.setAngvel(v3(), true);
+    if (this.flyTime <= 0) {
+      this.flyTime = 0;
+      this.sinceFlight = 0;
+    }
+  }
+
+  /**
    * In the air the kart is held toward level by a PD controller, and the
    * driver only leans the target: throttle tips the nose down a touch, brake
    * pulls it up, steer yaws. A raw pitch torque flipped karts — an AI or a
@@ -411,6 +482,16 @@ export class Kart {
       this.place(v3(p.x, p.y + 1.2, p.z), yawQuat(yaw));
     }
   }
+}
+
+/** Hamilton product a * b. */
+function mulQuat(a: Quat, b: Quat): Quat {
+  return {
+    w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+    x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+    y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+    z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+  };
 }
 
 /** Rotation about world +Y. */

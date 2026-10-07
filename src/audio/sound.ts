@@ -23,7 +23,9 @@ export type Sfx =
   | 'beep'
   | 'go'
   | 'lap'
-  | 'finish';
+  | 'finish'
+  | 'squawk'
+  | 'flap';
 
 export class Sound {
   private ctx: AudioContext | null = null;
@@ -191,6 +193,24 @@ export class Sound {
       case 'lap':
         env(0.3, 0.01, 0.4);
         osc('triangle', 1046, 1568, 0.3);
+        break;
+      case 'squawk': {
+        // A harsh, warbling macaw call: a square wave bent up and down.
+        env(0.45, 0.01, 0.55);
+        const o = osc('square', 900, 1500, 0.25);
+        o.frequency.exponentialRampToValueAtTime(700, now + 0.55);
+        const lfo = ctx.createOscillator();
+        lfo.frequency.value = 38;
+        const depth = ctx.createGain();
+        depth.gain.value = 180;
+        lfo.connect(depth).connect(o.frequency);
+        lfo.start(now);
+        lfo.stop(now + 0.6);
+        break;
+      }
+      case 'flap':
+        env(0.25 * volume, 0.02, 0.18);
+        noise('lowpass', 900, 250, 0.7, 0.2);
         break;
       case 'finish':
         env(0.4, 0.01, 1.6);

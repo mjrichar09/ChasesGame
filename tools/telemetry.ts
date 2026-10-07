@@ -17,6 +17,8 @@ let maxComp = 0, bottomOuts = 0, airSteps = 0, longestAir = 0, maxSpeed = 0, pic
 const where: Record<string, number> = {};
 // Where each kart's time goes: spun out, wobbling (whacked/bonked), wading, crawling.
 const lost = sim.karts.map(() => ({ spin: 0, wobble: 0, wet: 0, slow: 0 }));
+// Parrot flights: lap distance gained over the flight's 6 s (+ landing), per flight.
+const flights: { kart: number; start: number; t0: number; done?: number }[] = [];
 for (let i = 0; i < maxSteps && !sim.allFinished; i++) {
   race.step();
   for (const k of sim.karts) {
@@ -32,9 +34,11 @@ for (let i = 0; i < maxSteps && !sim.allFinished; i++) {
     if (Math.abs(k.forwardSpeed) < 5) l.slow += sim.dt;
   }
   for (const e of sim.items.events) {
+    if (e.type === 'parrot') flights.push({ kart: e.kart, start: sim.progress[e.kart]!.dist, t0: sim.raceTime });
     if (e.type === 'pickup') pickups++; else if (e.type === 'boost') boosts++; else if (e.type === 'peelHit') hits++; else if (e.type === 'whack') whacks++;
   }
   sim.items.events = [];
+  for (const f of flights) if (f.done === undefined && sim.raceTime - f.t0 >= 7) f.done = sim.progress[f.kart]!.dist - f.start;
   for (const r of sim.respawned) { const b = `${Math.round(sim.progress[r]!.s / 25) * 25}:${sim.progress[r]!.lastRespawn}`; where[b] = (where[b] ?? 0) + 1; }
 }
 console.log(`time ${sim.raceTime.toFixed(1)}s  finished ${sim.finishOrder.length}/${sim.karts.length}`);
@@ -47,3 +51,5 @@ console.log(`max speed ${maxSpeed.toFixed(1)} m/s  max compression ${maxComp.toF
 console.log(`airtime ${(airSteps / 120 / sim.karts.length).toFixed(1)} s/kart  longest ${longestAir.toFixed(2)} s`);
 console.log(`pickups ${pickups} boosts ${boosts} peel hits ${hits} whacks ${whacks}`);
 console.log('respawns by s', where);
+const gains = flights.filter((f) => f.done !== undefined).map((f) => f.done!);
+console.log(`parrot flights ${flights.length}  lap metres gained in 7 s: ${gains.map((g) => g.toFixed(0)).join(' ')}  (driving covers ~${(7 * 24).toFixed(0)})`);

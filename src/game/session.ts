@@ -26,6 +26,7 @@ import { type TrackView, buildTrackView } from '../render/trackView.js';
 import { toon } from '../render/toon.js';
 import { AiDriver, personality } from '../sim/driver.js';
 import { type DriverInput, NEUTRAL_INPUT } from '../sim/input.js';
+import { Items } from '../sim/items.js';
 import { RaceSim } from '../sim/race.js';
 import { Rng } from '../sim/rng.js';
 import { Track } from '../sim/track.js';
@@ -47,6 +48,8 @@ const MAX_FRAME = 0.1;
 const params = new URLSearchParams(location.search);
 const DEV_LAPS = Number(params.get('laps')) || undefined;
 const AUTOPILOT = params.has('autopilot');
+/** `?give=parrot` (or banana/snake): hand the player that item at GO, for testing. */
+const GIVE = params.get('give') as 'banana' | 'snake' | 'parrot' | null;
 
 export class Game {
   private readonly stage: Stage;
@@ -75,6 +78,8 @@ export class Game {
   private last = 0;
   private wasAir: boolean[] = [];
   private wasWet: boolean[] = [];
+  private flapTimer = 0;
+  private warned = false;
   private lastLap = 0;
   private playerFinishedAt: number | null = null;
   private seed = 1;
@@ -265,7 +270,9 @@ export class Game {
         if (i === this.player && !playerDone && !AUTOPILOT) return human;
         return this.drivers[i]!.drive(sim.dt, k, sim.progress[i]!, sim.track, sim.karts, sim.items, playerPr.dist);
       });
-      sim.step(sim.phase === 'countdown' ? sim.karts.map(() => NEUTRAL_INPUT) : inputs);
+      const wasCountdown = sim.phase === 'countdown';
+      sim.step(wasCountdown ? sim.karts.map(() => NEUTRAL_INPUT) : inputs);
+      if (GIVE && wasCountdown && sim.phase === 'racing') Items.give(sim.karts[this.player]!, GIVE);
       sim.karts.forEach((k, i) => this.views[i]!.capture(k, sim.respawned.includes(i)));
       this.handleEvents(sim);
     }
@@ -384,6 +391,11 @@ export class Game {
             this.cam.kick(0.4);
           }
           break;
+        case 'parrot':
+          if (vol > 0) this.sound.play('squawk', vol);
+          this.fx.emit({ pos: v(e.pos).setY(e.pos.y + 3), count: 20, color: [0xd8262b, 0xffcf2e, 0x2a6fd8], speed: [2, 6], size: [0.3, 0.6], life: [0.5, 1.0], gravity: 3 });
+          if (e.kart === this.player) this.hud.shout('PARROT AIRLINES!', 'good', 1.2);
+          break;
         case 'bonk':
           // Splinters and dust off the logs.
           this.fx.emit({ pos: v(e.pos), count: Math.round(6 + e.strength * 14), color: [0x8a5a33, 0xd2b07a], speed: [2, 6], size: [0.25, 0.6], life: [0.3, 0.7], gravity: 8 });
@@ -407,15 +419,16 @@ export class Game {
     }
     sim.items.events = [];
 
+    const wet = LOOKS[sim.track.def.id]?.riverUnderGaps ?? true;
     for (const i of sim.respawned) {
       const pr = sim.progress[i]!;
-      if (pr.lastRespawn === 'fell' && sim.track.gaps.length) {
+      if (pr.lastRespawn === 'fell' && sim.track.gaps.length && wet) {
         const k = sim.karts[i]!.position;
         if (i === this.player || this.nearPlayer(k) > 0) this.sound.play('splash', i === this.player ? 1 : 0.5);
       }
       if (i === this.player) {
         this.cam.cut();
-        if (pr.lastRespawn === 'fell') this.hud.shout('SPLASH!', 'bad');
+        if (pr.lastRespawn === 'fell') this.hud.shout(wet ? 'SPLASH!' : 'TIMBERRR!', 'bad');
       }
     }
 
@@ -501,6 +514,7 @@ export class Game {
         this.cam.update(dt, me.pos, me.rot, {
           boosting: kart.boosting,
           spinning: kart.spinning,
+          flying: kart.flying,
           speed: kart.forwardSpeed,
           track: sim.track,
           s: sim.progress[this.player]!.s,
@@ -510,6 +524,18 @@ export class Game {
       if (this.state === 'race') {
         this.hud.update(dt, sim, this.player, this.roster);
         this.sound.updateEngine(dt, kart.forwardSpeed, kart.applied.throttle, kart.grounded === 0, kart.boosting);
+        // Wingbeats while the player is being carried.
+        if (kart.flying) {
+          this.flapTimer -= dt;
+          if (this.flapTimer <= 0) {
+            this.sound.play('flap', kart.flyTime < 1 ? 1 : 0.7);
+            this.flapTimer = kart.flyTime < 1 ? 0.2 : 0.32;
+          }
+          if (kart.flyTime < 1 && !this.warned) {
+            this.warned = true;
+            this.hud.shout('HOLD ON!', 'bad', 0.9);
+          }
+        } else this.warned = false;
       }
     } else {
       this.menuCamera(dt);

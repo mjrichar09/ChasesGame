@@ -44,7 +44,8 @@ export type ItemEvent =
   | { type: 'peelHit'; kart: number; owner: number; pos: Vec3 }
   | { type: 'swing'; kart: number; side: -1 | 1; pos: Vec3 }
   | { type: 'whack'; kart: number; victim: number; pos: Vec3 }
-  | { type: 'bonk'; kart: number; pos: Vec3; strength: number };
+  | { type: 'bonk'; kart: number; pos: Vec3; strength: number }
+  | { type: 'parrot'; kart: number; pos: Vec3 };
 
 const rising = (now: boolean, before: boolean) => now && !before;
 
@@ -68,13 +69,15 @@ export class Items {
   }
 
   private roll(): Exclude<ItemKind, 'none'> {
-    return this.rng.next() < ITEMS.snakeChance ? 'snake' : 'banana';
+    const r = this.rng.next();
+    if (r < ITEMS.parrotChance) return 'parrot';
+    return r < ITEMS.parrotChance + ITEMS.snakeChance ? 'snake' : 'banana';
   }
 
   /** Give a kart an item directly (tests, debug). */
   static give(kart: Kart, kind: Exclude<ItemKind, 'none'>): void {
     kart.item = kind;
-    kart.charges = kind === 'banana' ? ITEMS.bananasPerBunch : ITEMS.snakeSwings;
+    kart.charges = kind === 'banana' ? ITEMS.bananasPerBunch : kind === 'snake' ? ITEMS.snakeSwings : 1;
   }
 
   /**
@@ -101,7 +104,7 @@ export class Items {
   }
 
   private collect(kart: Kart, pos: Vec3): void {
-    if (kart.item !== 'none') return;
+    if (kart.item !== 'none' || kart.flying) return;
     const r2 = ITEMS.pickupRadius * ITEMS.pickupRadius;
     for (const p of this.pickups) {
       if (!p.active) continue;
@@ -119,6 +122,15 @@ export class Items {
     const prev = kart.prevInput;
     if (kart.item === 'banana' && rising(input.item, prev.item)) {
       this.eatBanana(kart);
+      return;
+    }
+    if (kart.item === 'parrot' && rising(input.item, prev.item)) {
+      kart.item = 'none';
+      kart.charges = 0;
+      const pos = kart.position;
+      const road = this.track.at(this.track.project(pos, -1).s);
+      kart.takeOff(Math.max(road.p.y, pos.y - 1));
+      this.events.push({ type: 'parrot', kart: kart.index, pos });
       return;
     }
     if (kart.item !== 'snake') return;
@@ -161,7 +173,7 @@ export class Items {
     const fwd = kart.forward;
     let best: { kart: Kart; d: number } | null = null;
     for (const other of karts) {
-      if (other === kart) continue;
+      if (other === kart || other.flying) continue;
       const rel = sub(other.position, pos);
       const lat = dot(rel, right) * side;
       const lon = dot(rel, fwd);
@@ -195,7 +207,7 @@ export class Items {
   }
 
   private peelHits(kart: Kart, pos: Vec3): void {
-    if (kart.spinning) return;
+    if (kart.spinning || kart.flying) return;
     const r2 = ITEMS.peelRadius * ITEMS.peelRadius;
     for (let i = 0; i < this.peels.length; i++) {
       const peel = this.peels[i]!;

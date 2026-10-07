@@ -3,7 +3,7 @@ import { TRACKS } from '../src/data/tracks/index.js';
 import { VINE_VALLEY } from '../src/data/tracks/jungle1.js';
 import { AiDriver, personality } from '../src/sim/driver.js';
 import type { TrackDef } from '../src/sim/track.js';
-import { ITEMS, RACE } from '../src/data/tuning.js';
+import { ITEMS, PARROT, RACE } from '../src/data/tuning.js';
 import { autoRace } from '../src/sim/autopilot.js';
 import { type DriverInput, NEUTRAL_INPUT } from '../src/sim/input.js';
 import { Items } from '../src/sim/items.js';
@@ -185,6 +185,70 @@ describe('snake', () => {
     }
     expect(swings).toBe(ITEMS.snakeSwings);
     expect(me.item).toBe('none');
+  });
+});
+
+describe('parrot', () => {
+  function airborne(): RaceSim {
+    const sim = racing(2);
+    putAt(sim, 0, 140, 0);
+    putAt(sim, 1, 300, 0);
+    settle(sim, 40);
+    Items.give(sim.karts[0]!, 'parrot');
+    sim.step([press({ item: true }), press({})]);
+    return sim;
+  }
+
+  it('lifts the kart for six seconds at altitude, then lets go', () => {
+    const sim = airborne();
+    const kart = sim.karts[0]!;
+    expect(kart.flying).toBe(true);
+    expect(kart.item).toBe('none');
+    const road = sim.track.at(sim.progress[0]!.s).p.y;
+    settle(sim, 120 * 3, [press({ throttle: 1 })]);
+    expect(kart.flying).toBe(true);
+    expect(kart.position.y - sim.track.at(sim.progress[0]!.s).p.y).toBeGreaterThan(PARROT.altitude - 1.5);
+    expect(kart.position.y).toBeGreaterThan(road + 3);
+    settle(sim, 120 * 3 + 10, [press({ throttle: 1 })]);
+    expect(kart.flying).toBe(false);
+  });
+
+  it('flies over peels and out of reach of snakes', () => {
+    const sim = airborne();
+    const [me, them] = sim.karts as [typeof sim.karts[0], typeof sim.karts[0]];
+    settle(sim, 120);
+    // A peel right under the flying kart.
+    sim.items.peels.push({ id: 7, pos: sim.track.pointAt(sim.progress[0]!.s, sim.progress[0]!.lateral), yaw: 0, owner: 1, age: 9 });
+    settle(sim, 5, [press({ throttle: 1 })]);
+    expect(me.spinning).toBe(false);
+    // A snake beside the flying kart's shadow finds nobody.
+    putAt(sim, 1, sim.progress[0]!.s, sim.progress[0]!.lateral + 1.6);
+    Items.give(them, 'snake');
+    expect(sim.items.target(them, 1, sim.karts)).toBeNull();
+    expect(sim.items.target(them, -1, sim.karts)).toBeNull();
+  });
+
+  it('credits a forward shortcut, but never more than the cap', () => {
+    const sim = airborne();
+    const kart = sim.karts[0]!;
+    const pr = sim.progress[0]!;
+    settle(sim, 60, [press({ throttle: 1 })]);
+    const before = pr.dist;
+    // Carry the kart straight across to a stretch 250 m further round the lap.
+    const ahead = sim.track.at(pr.s + 250);
+    kart.place({ x: ahead.p.x, y: ahead.p.y + 6, z: ahead.p.z }, kart.rotation);
+    kart.takeOff(ahead.p.y);
+    settle(sim, 2, [press({ throttle: 1 })]);
+    expect(pr.dist - before).toBeGreaterThan(220);
+    expect(pr.dist - before).toBeLessThan(sim.track.length * PARROT.maxSkip);
+    // A carry *backwards* gives nothing back.
+    const after = pr.dist;
+    const behind = sim.track.at(pr.s - 300);
+    kart.place({ x: behind.p.x, y: behind.p.y + 6, z: behind.p.z }, kart.rotation);
+    kart.takeOff(behind.p.y);
+    settle(sim, 2, [press({ throttle: 1 })]);
+    expect(pr.dist).toBeGreaterThan(after - 50);
+    expect(pr.dist).toBeLessThan(after + 1);
   });
 });
 

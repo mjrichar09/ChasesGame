@@ -437,6 +437,36 @@ button:focus-visible {
   animation: pop 0.35s ease-out;
 }
 
+.hud-flight {
+  width: 92px;
+  height: 14px;
+  border-radius: 7px;
+  border: 3px solid var(--ink);
+  background: rgba(36, 22, 10, 0.6);
+  overflow: hidden;
+}
+
+.hud-flight i {
+  display: block;
+  height: 100%;
+  background: #4dd2ff;
+}
+
+.hud-flight.low i {
+  background: #ff8a6a;
+  animation: blink 0.25s steps(2) infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.hud-item[data-kind='parrot'] {
+  background: radial-gradient(circle at 40% 35%, #e9fbff, #4dd2ff);
+}
+
 .hud-pips {
   display: flex;
   gap: 5px;

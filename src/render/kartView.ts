@@ -11,9 +11,10 @@
 
 import * as THREE from 'three';
 import type { Gorilla } from '../data/gorillas.js';
-import { ITEMS, KART } from '../data/tuning.js';
+import { ITEMS, KART, PARROT } from '../data/tuning.js';
 import type { Kart } from '../sim/kart.js';
 import { celebrate } from './celebrate.js';
+import { type ParrotRig, animateParrot, buildParrot } from './parrot.js';
 import { type KartRig, buildKart } from './kartModel.js';
 import { GEO, PartBuilder, toon } from './toon.js';
 
@@ -40,6 +41,9 @@ export class KartView {
   private celebT = 0;
   private celebSeated = true;
   private readonly seatY: number;
+  /** Built the first time this kart flies. */
+  private parrot: ParrotRig | null = null;
+  private parrotT = 0;
   /** Rendered pose this frame, for the camera and effects. */
   readonly pos = new THREE.Vector3();
   readonly rot = new THREE.Quaternion();
@@ -66,6 +70,49 @@ export class KartView {
 
   get celebrating(): boolean {
     return this.celebLeft > 0;
+  }
+
+  /**
+   * The parrot swoops down at take-off, hauls the kart along on two vines,
+   * flaps harder as it tires, and after letting go climbs away and is gone.
+   */
+  private animateParrot(kart: Kart, dt: number): void {
+    const leaving = !kart.flying && kart.sinceFlight < 1.4;
+    if (!kart.flying && !leaving) {
+      if (this.parrot) this.parrot.root.visible = false;
+      return;
+    }
+    if (!this.parrot) {
+      this.parrot = buildParrot();
+      this.rig.root.add(this.parrot.root);
+    }
+    const p = this.parrot;
+    p.root.visible = true;
+    this.parrotT += dt;
+    const HOVER = 3.1;
+    let y = HOVER;
+    let z = 0.2;
+    let effort = 0.2;
+    if (kart.flying) {
+      // Swoop in from high above over the first half-second.
+      const arrive = Math.min(1, kart.flyElapsed / 0.5);
+      y = HOVER + (1 - arrive) * (1 - arrive) * 10;
+      effort = kart.flyElapsed < 0.8 ? 1 : kart.flyTime < PARROT.sag ? 1 : 0.25;
+    } else {
+      // Let go: climb away and shrink into the distance.
+      const t = kart.sinceFlight;
+      y = HOVER + t * t * 6;
+      z = 0.2 + t * 8;
+      effort = 0.6;
+    }
+    p.root.position.set(0, y, z);
+    // The rig root is the kart; keep the bird level in the world-ish sense.
+    animateParrot(p, this.parrotT, effort);
+    // Vines reach from the talons down to the chassis while carrying.
+    for (const v of p.vines) {
+      v.visible = kart.flying;
+      v.scale.y = Math.max(0.1, (y - 0.9) / 1.25 - 0.7);
+    }
   }
 
   /** Blend the celebration over whatever pose the frame has set so far. */
@@ -204,6 +251,8 @@ export class KartView {
     if (kart.wobbleTime > 0) {
       g.head.rotation.z = Math.sin(kart.wobbleTime * 30) * 0.35;
     }
+    this.animateParrot(kart, dt);
+
     // A spin-out or a wobble interrupts any celebrating.
     if (kart.spinning || kart.wobbleTime > 0) this.celebLeft = 0;
     this.applyCelebration(dt);

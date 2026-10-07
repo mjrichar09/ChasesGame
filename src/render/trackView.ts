@@ -57,6 +57,32 @@ function roadTexture(): THREE.CanvasTexture {
   });
 }
 
+/** The top of a branch: bark ridges running along it, moss at the edges. */
+function barkTexture(): THREE.CanvasTexture {
+  return canvasTexture(256, 256, (c) => {
+    c.fillStyle = '#8a6440';
+    c.fillRect(0, 0, 256, 256);
+    const rng = new Rng(13);
+    for (let i = 0; i < 70; i++) {
+      const x = rng.range(20, 236);
+      const w = rng.range(3, 9);
+      c.fillStyle = rng.next() < 0.5 ? '#6e4c2e' : '#9c7550';
+      c.fillRect(x, 0, w, 256);
+    }
+    for (let i = 0; i < 40; i++) {
+      c.fillStyle = 'rgba(60,38,20,0.6)';
+      c.fillRect(rng.range(20, 236), rng.range(0, 256), rng.range(6, 18), 3);
+    }
+    for (const [x0, dir] of [[0, 1], [256, -1]] as const) {
+      for (let i = 0; i < 260; i++) {
+        const d = rng.next() ** 2 * 30;
+        c.fillStyle = rng.next() < 0.5 ? '#5e8f3a' : '#4b7a2e';
+        c.fillRect(x0 + dir * d - 2, rng.range(0, 256), 5, rng.range(4, 10));
+      }
+    }
+  });
+}
+
 function groundTexture(base: string): THREE.CanvasTexture {
   return canvasTexture(256, 256, (c) => {
     c.fillStyle = base;
@@ -96,19 +122,20 @@ function plankTexture(): THREE.CanvasTexture {
 
 export function buildTrackView(track: Track, look: TrackLook): TrackView {
   const group = new THREE.Group();
-  group.add(roadMesh(track));
-  group.add(skirtMesh(track));
+  group.add(roadMesh(track, look.road));
+  if (!track.def.elevated) group.add(skirtMesh(track));
   group.add(ground(look.ground));
-  group.add(walls(track));
+  group.add(look.barrier === 'vines' ? vineRails(track) : walls(track));
   for (const k of kickerMeshes(track)) group.add(k);
-  const water = river(track);
+  if (look.branches) group.add(branchesAndTrees(track));
+  const water = look.riverUnderGaps ? river(track) : [];
   if (look.stream) water.push(stream(look.stream));
   for (const w of fords(track)) water.push(w);
   for (const w of water) group.add(w);
   group.add(startArch(track));
   if (look.vineArches) group.add(vineArches(track));
   if (look.canopy) group.add(canopy(track));
-  group.add(scenery(track, look.scenery));
+  if (look.scenery > 0) group.add(scenery(track, look.scenery));
 
   return {
     group,
@@ -122,7 +149,7 @@ export function buildTrackView(track: Track, look: TrackLook): TrackView {
 }
 
 /** Road surface with UVs: u across the road, v along it. */
-function roadMesh(track: Track): THREE.Mesh {
+function roadMesh(track: Track, surface: 'dirt' | 'bark'): THREE.Mesh {
   const pos: number[] = [];
   const uv: number[] = [];
   const idx: number[] = [];
@@ -148,7 +175,7 @@ function roadMesh(track: Track): THREE.Mesh {
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   geo.setIndex(idx);
   geo.computeVertexNormals();
-  const tex = roadTexture();
+  const tex = surface === 'bark' ? barkTexture() : roadTexture();
   tex.repeat.set(1, 1);
   const mesh = new THREE.Mesh(geo, new THREE.MeshToonMaterial({ map: tex, gradientMap: toon(0).gradientMap }));
   mesh.receiveShadow = true;
@@ -729,6 +756,162 @@ function canopy(track: Track): THREE.Group {
     beam.rotation.set(0.18, 0, -0.22);
     g.add(beam);
   }
+  return g;
+}
+
+/** Vine ropes strung between wooden posts, along every barrier segment. */
+function vineRails(track: Track): THREE.Group {
+  const g = new THREE.Group();
+  const n = track.walls.length;
+  const postGeo = new THREE.CylinderGeometry(0.1, 0.13, 1.4, 6);
+  const ropeGeo = new THREE.CylinderGeometry(0.06, 0.06, 1, 5);
+  ropeGeo.rotateX(Math.PI / 2);
+  const posts = new THREE.InstancedMesh(postGeo, toon(0x6b4524), n);
+  const ropes = new THREE.InstancedMesh(ropeGeo, toon(0x3f7d2c), n * 2);
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const drop = (WALL_SOLID_HEIGHT - WALL_HEIGHT) / 2;
+  track.walls.forEach((w, i) => {
+    q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), w.yaw);
+    const base = w.center.y - w.half.y + 0.15;
+    const off = new THREE.Vector3(0, 0, w.half.z).applyQuaternion(q);
+    m.compose(new THREE.Vector3(w.center.x + off.x, base + 0.6, w.center.z + off.z), q, new THREE.Vector3(1, 1, 1));
+    posts.setMatrixAt(i, m);
+    for (let k = 0; k < 2; k++) {
+      // Sagging a touch: the lower rope a little lower in the middle.
+      const y = base + (k === 0 ? 1.05 : 0.55) - drop * 0;
+      m.compose(new THREE.Vector3(w.center.x, y, w.center.z), q, new THREE.Vector3(1, 1, w.half.z * 2));
+      ropes.setMatrixAt(i * 2 + k, m);
+    }
+  });
+  g.add(posts, ropes);
+  return g;
+}
+
+/**
+ * The treetop world: a round branch under every stretch of road (breaking at
+ * the gaps, where it meets a trunk), giant trees with leafy crowns, and a
+ * rolling sea of treetops far below that hides the ground.
+ */
+function branchesAndTrees(track: Track): THREE.Group {
+  const g = new THREE.Group();
+  const rng = new Rng(71);
+  const bark = new THREE.MeshToonMaterial({ map: barkTexture(), gradientMap: toon(0).gradientMap });
+  (bark.map as THREE.Texture).repeat.set(3, 1);
+
+  // Branches: one tube per unbroken run of road.
+  const n = track.samples.length;
+  const start = track.samples.findIndex((s, i) => s.road && !track.samples[(i - 1 + n) % n]!.road);
+  const first = start < 0 ? 0 : start;
+  let run: THREE.Vector3[] = [];
+  const flush = () => {
+    if (run.length < 4) return;
+    const r = track.def.width * 0.42;
+    const curve = new THREE.CatmullRomCurve3(run, start < 0 && run.length >= n);
+    const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, Math.ceil(run.length / 2), r, 12, start < 0 && run.length >= n), bark);
+    tube.castShadow = true;
+    tube.receiveShadow = true;
+    g.add(tube);
+    // Branch ends taper into knots.
+    for (const p of [run[0]!, run[run.length - 1]!]) {
+      const knot = new THREE.Mesh(GEO.sphere, toon(0x6e4c2e));
+      knot.scale.setScalar(r * 1.05);
+      knot.position.copy(p);
+      g.add(knot);
+    }
+  };
+  for (let k = 0; k <= n; k++) {
+    const smp = track.samples[(first + k) % n]!;
+    if (!smp.road) {
+      flush();
+      run = [];
+      continue;
+    }
+    const r = track.def.width * 0.42;
+    run.push(new THREE.Vector3(smp.p.x, smp.p.y - r - 0.12, smp.p.z));
+  }
+  flush();
+
+  // Giant trees: a trunk at each end of every gap (the branches grow from
+  // them) and at intervals along the course, off to the outside.
+  const trunkGeo = new THREE.CylinderGeometry(1, 1.25, 1, 14);
+  trunkGeo.translate(0, 0.5, 0);
+  const crown = new THREE.IcosahedronGeometry(1, 1);
+  const crownMats = [toon(0x2f7d2a), toon(0x3f9a34), toon(0x4fae3a)];
+  const spots: { x: number; z: number; top: number; r: number }[] = [];
+  for (const gap of track.gaps) {
+    for (const s of [gap.s0 - 2, gap.s1 + 2]) {
+      const k = track.at(s);
+      const side = s === gap.s0 - 2 ? 1 : -1;
+      const p = track.pointAt(s, side * (k.halfWidth + 3.2));
+      spots.push({ x: p.x, z: p.z, top: k.p.y + 16, r: 3.4 });
+    }
+  }
+  for (let s = 20; s < track.length; s += 75) {
+    if (track.inGap(s)) continue;
+    const k = track.at(s);
+    const side = k.curvature >= 0 ? 1 : -1; // outside of the bend
+    const p = track.pointAt(s, side * (k.halfWidth + rng.range(5, 9)));
+    const near = track.project({ x: p.x, y: p.y, z: p.z });
+    if (Math.abs(near.lateral) < track.at(near.s).halfWidth + 3.5) continue;
+    spots.push({ x: p.x, z: p.z, top: k.p.y + rng.range(14, 20), r: rng.range(2.6, 3.6) });
+  }
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const trunks = new THREE.InstancedMesh(trunkGeo, toon(0x5b4330), spots.length);
+  const crowns: THREE.Matrix4[][] = [[], [], []];
+  spots.forEach((t, i) => {
+    m.compose(new THREE.Vector3(t.x, -0.5, t.z), q, new THREE.Vector3(t.r, t.top + 0.5, t.r));
+    trunks.setMatrixAt(i, m);
+    for (let c = 0; c < 6; c++) {
+      const a = rng.range(0, Math.PI * 2);
+      const d = rng.range(0, 7);
+      const sc = rng.range(5, 8.5);
+      m.compose(new THREE.Vector3(t.x + Math.cos(a) * d, t.top + rng.range(-1, 3), t.z + Math.sin(a) * d), q, new THREE.Vector3(sc, sc * 0.6, sc));
+      crowns[c % 3]!.push(m.clone());
+    }
+  });
+  trunks.castShadow = true;
+  g.add(trunks);
+  crowns.forEach((list, i) => {
+    const inst = new THREE.InstancedMesh(crown, crownMats[i]!, list.length);
+    list.forEach((pm, j) => inst.setMatrixAt(j, pm));
+    inst.castShadow = true;
+    g.add(inst);
+  });
+
+  // The sea of treetops below.
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  let lowY = Infinity;
+  for (const s of track.samples) {
+    minX = Math.min(minX, s.p.x);
+    maxX = Math.max(maxX, s.p.x);
+    minZ = Math.min(minZ, s.p.z);
+    maxZ = Math.max(maxZ, s.p.z);
+    lowY = Math.min(lowY, s.p.y);
+  }
+  const sea: THREE.Matrix4[][] = [[], [], []];
+  const pad = 260;
+  for (let x = minX - pad; x < maxX + pad; x += 15) {
+    for (let z = minZ - pad; z < maxZ + pad; z += 15) {
+      const sc = rng.range(7, 12);
+      m.compose(
+        new THREE.Vector3(x + rng.range(-6, 6), lowY - rng.range(12, 18), z + rng.range(-6, 6)),
+        q,
+        new THREE.Vector3(sc, sc * 0.55, sc),
+      );
+      sea[Math.floor(rng.next() * 3)]!.push(m.clone());
+    }
+  }
+  const seaMats = [toon(0x2a6a26), toon(0x347d2c), toon(0x3f8f34)];
+  sea.forEach((list, i) => {
+    const inst = new THREE.InstancedMesh(crown, seaMats[i]!, list.length);
+    list.forEach((pm, j) => inst.setMatrixAt(j, pm));
+    g.add(inst);
+  });
   return g;
 }
 

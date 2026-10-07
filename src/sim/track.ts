@@ -58,7 +58,14 @@ export interface StreamDef extends TrackAnchor {
   skew?: number;
 }
 
-export type FeatureDef = KickerDef | GapDef | StreamDef;
+/** A stretch with no barrier — on one side (−1 left, 1 right) or both (0). Fall off and you respawn. */
+export interface OpenDef extends TrackAnchor {
+  kind: 'open';
+  length: number;
+  side?: -1 | 0 | 1;
+}
+
+export type FeatureDef = KickerDef | GapDef | StreamDef | OpenDef;
 
 export interface PickupRowDef extends TrackAnchor {
   /** Lateral positions across the road, m (+ = right). */
@@ -74,6 +81,11 @@ export interface TrackDef {
   start: number;
   features: FeatureDef[];
   pickups: PickupRowDef[];
+  /**
+   * Raised high in the air (branches): no banks down to the ground under the
+   * road edges — there is nothing under you but a long drop.
+   */
+  elevated?: boolean;
 }
 
 export interface Sample {
@@ -143,6 +155,8 @@ export class Track {
   readonly kickers: Kicker[] = [];
   readonly gaps: Gap[] = [];
   readonly waters: Water[] = [];
+  /** Stretches with no barrier on a side. */
+  readonly opens: { s0: number; s1: number; side: -1 | 0 | 1 }[] = [];
   readonly walls: Wall[] = [];
   readonly pickups: Pickup[] = [];
   /** `s` of each control point, before the start offset is applied. */
@@ -157,6 +171,10 @@ export class Track {
 
     for (const f of def.features) {
       const s = this.anchor(f);
+      if (f.kind === 'open') {
+        this.opens.push({ s0: s, s1: s + f.length, side: f.side ?? 0 });
+        continue;
+      }
       if (f.kind === 'stream') {
         this.waters.push({ s0: s - f.width / 2, s1: s + f.width / 2, skew: f.skew ?? 0 });
       } else if (f.kind === 'kicker') {
@@ -213,6 +231,12 @@ export class Track {
   pointAt(s: number, lateral: number): Vec3 {
     const k = this.at(s);
     return add(k.p, scale(k.r, lateral));
+  }
+
+  /** True where the barrier on `side` is missing. */
+  isOpen(s: number, side: -1 | 1): boolean {
+    const w = this.wrap(s);
+    return this.opens.some((o) => (o.side === 0 || o.side === side) && this.between(w, o.s0, o.s1));
   }
 
   inWater(s: number): boolean {
@@ -301,7 +325,7 @@ export class Track {
         const innerR = 1 / Math.max(Math.abs(k.curvature), 1e-4) - k.halfWidth;
         const seg = inside ? clamp(innerR * 0.5, 0.5, 4) : 4;
         const next = s + seg;
-        if (!this.inGap(s) && !this.inGap(next)) {
+        if (!this.inGap(s) && !this.inGap(next) && !this.isOpen(s, side) && !this.isOpen(next, side)) {
           const a = this.pointAt(s, side * (k.halfWidth + WALL_THICK / 2));
           const b = this.pointAt(next, side * (this.at(next).halfWidth + WALL_THICK / 2));
           const mid = scale(add(a, b), 0.5);
@@ -352,7 +376,7 @@ export class Track {
         [al, bl, false],
         [ar, br, true],
       ] as const) {
-        if (top0.y < 0.05 && top1.y < 0.05) continue;
+        if (this.def.elevated || (top0.y < 0.05 && top1.y < 0.05)) continue;
         const j0 = push(top0);
         const j1 = push(top1);
         const j2 = push(v3(top0.x, -0.5, top0.z));

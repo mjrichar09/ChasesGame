@@ -34,7 +34,7 @@ Playwright. Deploys to GitHub Pages (`.github/workflows/pages.yml`).
 - With `npm run dev` running: `npm run shoot`, `npm run shoot:mobile`,
   `npm run racecheck` (full 1-lap autopilot race to the results screen).
   Screenshots land in `shots/`.
-- URL switches for dev: `?laps=1`, `?autopilot`.
+- URL switches for dev: `?laps=1`, `?autopilot`, `?give=parrot|banana|snake`.
 
 ## Things that bit us (keep them fixed)
 - Wheel rays ignore barriers and other karts (collision groups in `sim/kart.ts`):
@@ -44,6 +44,10 @@ Playwright. Deploys to GitHub Pages (`.github/workflows/pages.yml`).
 - The track builder relaxes any corner tighter than half the road width + 2.5 m;
   sharper and the inside edge folds and barrier boxes poke across the road.
 - Tracks live in `src/data/tracks/` (`index.ts` lists them, `looks.ts` styles them).
+- Lap progress normally only searches ±40 m of the last position (no shortcuts).
+  During a parrot flight (+2.5 s) it searches the whole lap, accepting forward
+  jumps up to `PARROT.maxSkip` of a lap per flight, so flying shortcuts count
+  but can't be chained into a lap.
 
 ## Conventions
 - Every source file opens with a comment saying why it exists.

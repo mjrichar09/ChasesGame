@@ -111,9 +111,35 @@ export const ITEMS = {
   whackShove: 900,
 
   pickupRadius: 1.9,
+  /** Respawned pickups roll parrot, then snake, then bananas. */
+  parrotChance: 0.15,
   pickupRespawn: 5,
   /** Chance a respawned pickup comes back as a snake rather than bananas. */
   snakeChance: 0.35,
+} as const;
+
+/**
+ * The parrot: a huge macaw grabs the kart and flies it for `time` seconds.
+ * You steer and set the pace; it holds `altitude` above the road (or above
+ * where you took off, if that is higher). It sags over the last `sag`
+ * seconds, then lets go. High enough to clear barriers, peels and snakes.
+ */
+export const PARROT = {
+  time: 6,
+  altitude: 6.5,
+  speed: 30,
+  /** Pace with no gas and with full brake, fraction of `speed`. */
+  coast: 0.55,
+  brake: 0.35,
+  accel: 16,
+  turnRate: 1.5,
+  climb: 2.4,
+  maxClimb: 7,
+  sag: 0.9,
+  /** Seconds after landing that lap progress may still jump to a shortcut. */
+  landGrace: 2.5,
+  /** Furthest a flight may move you along the lap, fraction of its length. */
+  maxSkip: 0.35,
 } as const;
 
 export const RACE = {
