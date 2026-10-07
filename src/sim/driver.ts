@@ -8,61 +8,122 @@
  * around peels, eats bananas on straights, and swings its snake at anyone
  * alongside.
  *
+ * Not every gorilla is good at that. Each has a `level`, 0 (rookie) to 1
+ * (ace), and it shapes everything: engine, how much grip it trusts, how early
+ * it brakes, how steady its hands are, how often it overcooks a corner — and
+ * how it uses items. Rookies fire bananas whenever, swing the snake late (or
+ * at nothing), miss peels on the road and take whatever line the parrot
+ * happens to fly. A field is a spread of levels, shifted by the difficulty.
+ * The AI's own randomness is seeded, so races still replay exactly.
+ *
  * Rubber-banding is deliberately light: AI well ahead of the leading player
  * lose a little power and AI well behind gain a little, so races stay close
  * without the leader feeling robbed.
  */
 
 import { KART, PARROT } from '../data/tuning.js';
-
-/** Deceleration the AI plans its braking around, m/s². */
-const BRAKE_DECEL = 17;
 import type { DriverInput } from './input.js';
 import type { Items } from './items.js';
 import type { Kart } from './kart.js';
 import { clamp, dot, lerp, sub } from './math.js';
 import type { Progress } from './race.js';
-import type { Rng } from './rng.js';
+import { Rng } from './rng.js';
 import type { Track } from './track.js';
 
+export type Difficulty = 'chill' | 'normal' | 'wild';
+
+/** The range of AI levels in a field, per difficulty. */
+const LEVELS: Record<Difficulty, [number, number]> = {
+  chill: [0, 0.5],
+  normal: [0.1, 0.85],
+  wild: [0.5, 1],
+};
+
+/** Levels for `count` AI drivers, evenly spread over the difficulty's range, shuffled. */
+export function fieldLevels(difficulty: Difficulty, count: number, rng: Rng): number[] {
+  const [lo, hi] = LEVELS[difficulty];
+  const levels = Array.from({ length: count }, (_, i) => (count === 1 ? hi : lo + ((hi - lo) * i) / (count - 1)));
+  for (let i = levels.length - 1; i > 0; i--) {
+    const j = Math.floor(rng.next() * (i + 1));
+    [levels[i], levels[j]] = [levels[j]!, levels[i]!];
+  }
+  return levels;
+}
+
 export interface Personality {
+  /** 0 rookie .. 1 ace. Everything below is derived from it, with a little jitter. */
+  level: number;
   /** Preferred lane, m (+ = right). */
   lane: number;
   /** How far the lane weaves, m, and how often (rad per metre). */
   weave: number;
   weaveFreq: number;
   phase: number;
-  /** 0.9 .. 1.0: fraction of the kart's full power. */
+  /** Fraction of the kart's full power. */
   skill: number;
   /** Lateral grip the driver trusts in corners, m/s². */
   cornerGrip: number;
-  /** Seconds it waits before eating a banana it has picked up. */
+  /** Deceleration it plans its braking around, m/s² (rookies brake early). */
+  brakeDecel: number;
+  /** Steering wobble, fraction of full lock. */
+  steerNoise: number;
+  /** Chance per second of overcooking the next corner. */
+  mistakes: number;
+  /** 0..1: how well it uses items. */
+  itemIQ: number;
+  /** Seconds it waits before using an item it has picked up. */
   patience: number;
+  /** Seeds the driver's own decisions. */
+  seed: number;
 }
 
-export function personality(rng: Rng, index: number): Personality {
+/** Level for kart `index` when no field was set up (tests, headless runs). */
+const defaultLevel = (index: number) => 0.2 + 0.7 * ((index * 0.37) % 1);
+
+export function personality(rng: Rng, index: number, level = defaultLevel(index)): Personality {
+  const l = Math.min(1, Math.max(0, level));
+  const jitter = () => rng.range(-0.05, 0.05);
   return {
+    level: l,
     lane: rng.range(-3.5, 3.5),
-    weave: rng.range(0.8, 2.4),
+    weave: rng.range(0.8, 2.4) * (1.6 - 0.6 * l),
     weaveFreq: rng.range(0.015, 0.04),
     phase: rng.range(0, Math.PI * 2),
-    // A spread so the field strings out rather than running as one blob.
-    skill: 0.9 + 0.1 * ((index * 0.37) % 1),
-    cornerGrip: rng.range(17, 23),
-    patience: rng.range(0.4, 2.5),
+    skill: 0.86 + 0.14 * l + jitter() * 0.2,
+    cornerGrip: 13 + 9 * l + jitter() * 10,
+    brakeDecel: 11 + 6 * l,
+    steerNoise: (1 - l) * 0.14,
+    mistakes: (1 - l) * 0.12,
+    itemIQ: Math.min(1, Math.max(0, l + jitter() * 2)),
+    patience: rng.range(0.4, 2.5) + (1 - l) * rng.range(0, 4),
+    seed: Math.floor(rng.next() * 0xffffffff),
   };
 }
 
 export class AiDriver {
   readonly me: Personality;
+  private readonly rng: Rng;
   private holding = 0;
   private pressed = false;
   /** Seconds spent pushing without moving, and seconds left of backing out. */
   private blocked = 0;
   private reversing = 0;
+  private t = 0;
+  /** Seconds left of a corner it is about to overcook. */
+  private overcook = 0;
+  /** Seconds a whack target has been alongside (reaction time). */
+  private sighted = 0;
 
   constructor(me: Personality) {
     this.me = me;
+    this.rng = new Rng(me.seed ?? 1);
+  }
+
+  /** A fixed 0..1 roll per (driver, thing) — e.g. "does this driver ever notice that peel?". */
+  private notices(id: number): number {
+    let h = (Math.imul(id + 1, 2654435761) ^ (this.me.seed ?? 1)) >>> 0;
+    h = Math.imul(h ^ (h >>> 15), 2246822507) >>> 0;
+    return (h >>> 0) / 4294967296;
   }
 
   drive(
@@ -79,7 +140,12 @@ export class AiDriver {
     const fwd = kart.forward;
     const right = kart.right;
     const speed = kart.forwardSpeed;
+    this.t += dt;
     if (kart.flying) return this.fly(kart, pr, track);
+    // Now and then a less able driver goes into the next corner too hot.
+    this.overcook = Math.max(0, this.overcook - dt);
+    if (this.overcook === 0 && this.rng.next() < me.mistakes * dt) this.overcook = 1.6;
+    const trust = this.overcook > 0 ? 1.45 : 1;
 
     // Rubber-band against the best human, when there is one.
     let band = 1;
@@ -102,8 +168,8 @@ export class AiDriver {
       const curv = Math.abs(k.curvature);
       if (d < 40) maxK = Math.max(maxK, curv);
       if (!k.road || track.inGap(pr.s + d + 10)) gapAhead = true;
-      const vCorner = Math.sqrt(me.cornerGrip / Math.max(curv, 1e-4));
-      cornerSpeed = Math.min(cornerSpeed, Math.sqrt(vCorner * vCorner + 2 * BRAKE_DECEL * Math.max(0, d - 3)));
+      const vCorner = Math.sqrt((me.cornerGrip * trust) / Math.max(curv, 1e-4));
+      cornerSpeed = Math.min(cornerSpeed, Math.sqrt(vCorner * vCorner + 2 * me.brakeDecel * trust * Math.max(0, d - 3)));
     }
 
     // Lane: personal offset, a weave, and a cut to the inside of the corner.
@@ -112,8 +178,12 @@ export class AiDriver {
     lane -= clamp(here.curvature * 120, -1, 1) * 3; // + curvature = left turn = inside is left (-)
     if (gapAhead) lane = 0;
     lane = this.dodgePeels(lane, pr, track, items);
+    // No railing: hold the middle, whatever the line says.
+    const openL = track.isOpen(pr.s + 10, -1) || track.isOpen(pr.s, -1);
+    const openR = track.isOpen(pr.s + 10, 1) || track.isOpen(pr.s, 1);
     const limit = here.halfWidth - 1.8;
-    lane = clamp(lane, -limit, limit);
+    lane = clamp(lane, openL ? -1 : -limit, openR ? 1 : limit);
+    const careful = openL || openR ? 0.35 : 1;
 
     // Pure pursuit.
     const look = 6 + Math.max(0, speed) * 0.45;
@@ -125,7 +195,9 @@ export class AiDriver {
     const wheelbase = KART.wheelFrontZ - KART.wheelRearZ;
     const angle = Math.atan2(2 * wheelbase * x, ld2);
     const lock = lerp(KART.steerLow, KART.steerHigh, clamp(Math.abs(speed) / KART.topSpeed, 0, 1));
-    let steer = clamp(angle / lock, -1, 1);
+    // Unsteady hands: a slow wander on top of the line, bigger for rookies.
+    const wander = (Math.sin(this.t * 0.9 + me.phase) + Math.sin(this.t * 2.3 + me.phase * 2) * 0.5) * me.steerNoise * careful;
+    let steer = clamp(angle / lock + wander, -1, 1);
     if (z < 0) steer = x >= 0 ? 1 : -1; // Facing the wrong way: turn round.
 
     let throttle = 1;
@@ -165,7 +237,9 @@ export class AiDriver {
    */
   private fly(kart: Kart, pr: Progress, track: Track): DriverInput {
     const pos = kart.position;
-    const reach = Math.max(0, kart.flyTime - 0.4) * PARROT.speed * 0.9;
+    // Aces find the longest shortcut the flight can reach; rookies flap
+    // roughly onward and leave most of it on the table.
+    const reach = Math.max(0, kart.flyTime - 0.4) * PARROT.speed * 0.9 * (0.45 + 0.45 * this.me.itemIQ);
     const best = shortcut(pos, pr.s, track, reach);
     const target = track.pointAt(pr.s + best, 0);
     const rel = sub(target, pos);
@@ -178,6 +252,8 @@ export class AiDriver {
   /** Shift the lane away from any peel lying near it in the next stretch. */
   private dodgePeels(lane: number, pr: Progress, track: Track, items: Items): number {
     for (const peel of items.peels) {
+      // Some drivers never see some peels.
+      if (this.notices(peel.id) > 0.25 + 0.75 * this.me.itemIQ) continue;
       const p = track.project(peel.pos, pr.s);
       const ahead = track.delta(pr.s, p.s);
       if (ahead < 3 || ahead > 30) continue;
@@ -207,12 +283,14 @@ export class AiDriver {
       return none;
     }
     this.holding += dt;
+    const iq = this.me.itemIQ;
     if (kart.item === 'parrot') {
-      // Worth it when a flight would cover far more lap than it flies — a
-      // shortcut — or once it has been held a while anyway.
+      // A smart driver waits for a flight that cuts off a lot of track;
+      // a rookie just goes once it feels like it.
       const reach = (PARROT.time - 0.6) * PARROT.speed * 0.9;
       const skip = shortcut(kart.position, pr.s, track, reach);
-      if (this.holding > this.me.patience && (skip > reach * 1.4 || this.holding > 8)) {
+      const worth = iq < 0.4 || skip > reach * 1.4 || this.holding > 8;
+      if (this.holding > this.me.patience && worth && !gapAhead) {
         this.pressed = true;
         this.holding = 0;
         return { ...none, item: true };
@@ -220,7 +298,8 @@ export class AiDriver {
       return none;
     }
     if (kart.item === 'banana') {
-      const straight = maxK < 0.012;
+      // Smart: boost down straights. Rookie: whenever (even mid-corner).
+      const straight = maxK < 0.012 || iq < 0.35;
       // Never into a gap: a boosted kart overshoots the landing.
       if (this.holding > this.me.patience && straight && !gapAhead && !kart.boosting) {
         this.pressed = true;
@@ -231,12 +310,26 @@ export class AiDriver {
     }
     // Snake.
     if (kart.swingCooldown > 0) return none;
+    // Rookies sometimes swing at thin air.
+    if (this.rng.next() < (1 - iq) * 0.3 * dt) {
+      this.pressed = true;
+      return this.rng.next() < 0.5 ? { ...none, whackLeft: true } : { ...none, whackRight: true };
+    }
     const left = items.target(kart, -1, karts);
     const right = items.target(kart, 1, karts);
-    if (!left && !right) return none;
+    if (!left && !right) {
+      this.sighted = 0;
+      return none;
+    }
+    // Reaction time: a target has to be alongside a moment before it swings.
+    this.sighted += dt;
+    if (this.sighted < (1 - iq) * 0.7) return none;
+    this.sighted = 0;
     this.pressed = true;
-    if (left && (!right || left.d < right.d)) return { ...none, whackLeft: true };
-    return { ...none, whackRight: true };
+    // ...and a slow reader picks the wrong side now and then.
+    const wrong = this.rng.next() < (1 - iq) * 0.3;
+    const goLeft = !!left && (!right || left.d < right.d);
+    return goLeft !== wrong ? { ...none, whackLeft: true } : { ...none, whackRight: true };
   }
 }
 

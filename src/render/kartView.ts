@@ -44,6 +44,8 @@ export class KartView {
   /** Built the first time this kart flies. */
   private parrot: ParrotRig | null = null;
   private parrotT = 0;
+  /** Seconds since the lava took this kart (−1 while racing). */
+  private toastT = -1;
   /** Rendered pose this frame, for the camera and effects. */
   readonly pos = new THREE.Vector3();
   readonly rot = new THREE.Quaternion();
@@ -184,6 +186,20 @@ export class KartView {
     this.rot.slerpQuaternions(this.prev.rot, this.curr.rot, alpha);
     rig.root.position.copy(this.pos);
     rig.root.quaternion.copy(this.rot);
+    // Taken by the lava: char black and sink into it.
+    if (kart.out) {
+      if (this.toastT < 0) {
+        this.toastT = 0;
+        const charred = toon(0x1c1614, { emissive: 0x2a0800 });
+        rig.root.traverse((o) => {
+          if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).material = charred;
+        });
+      }
+      this.toastT += dt;
+      rig.root.position.y -= Math.min(1.8, this.toastT * 0.6);
+      rig.root.visible = this.toastT < 4;
+      return;
+    }
 
     // Wheels hang at the spring length the sim has for them.
     kart.wheels.forEach((w, i) => {

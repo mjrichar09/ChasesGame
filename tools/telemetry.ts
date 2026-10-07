@@ -45,7 +45,7 @@ console.log(`time ${sim.raceTime.toFixed(1)}s  finished ${sim.finishOrder.length
 for (const i of sim.standings()) {
   const p = sim.progress[i]!;
   const l = lost[i]!;
-  console.log(`  #${i} ${p.finishTime?.toFixed(1) ?? 'DNF'}  laps ${p.lapTimes.map((t) => t.toFixed(1)).join(' / ')}  respawns ${p.respawns}  spin ${l.spin.toFixed(0)}s wobble ${l.wobble.toFixed(0)}s wet ${l.wet.toFixed(0)}s crawl ${l.slow.toFixed(0)}s`);
+  console.log(`  #${i} lvl ${race.drivers[i]!.me.level.toFixed(2)} ${p.dnf ? "TOASTED" : p.finishTime?.toFixed(1) ?? "DNF"}  laps ${p.lapTimes.map((t) => t.toFixed(1)).join(' / ')}  respawns ${p.respawns}  spin ${l.spin.toFixed(0)}s wobble ${l.wobble.toFixed(0)}s wet ${l.wet.toFixed(0)}s crawl ${l.slow.toFixed(0)}s`);
 }
 console.log(`max speed ${maxSpeed.toFixed(1)} m/s  max compression ${maxComp.toFixed(2)} m  bottom-out steps ${bottomOuts}`);
 console.log(`airtime ${(airSteps / 120 / sim.karts.length).toFixed(1)} s/kart  longest ${longestAir.toFixed(2)} s`);

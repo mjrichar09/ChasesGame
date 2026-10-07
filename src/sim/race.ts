@@ -17,6 +17,8 @@ import { KART, PARROT, RACE, SIM } from '../data/tuning.js';
 import { type DriverInput, NEUTRAL_INPUT } from './input.js';
 import { Items } from './items.js';
 import { BARRIER_GROUPS, GROUND_GROUPS, Kart, yawQuat } from './kart.js';
+import { lavaFront } from './lava.js';
+import { buildTerrain } from './terrain.js';
 import { type Vec3, add, dot, scale, v3 } from './math.js';
 import { Rng } from './rng.js';
 import { Track, type TrackDef } from './track.js';
@@ -47,6 +49,8 @@ export interface Progress {
   /** Seconds left of respawn grace. */
   grace: number;
   respawns: number;
+  /** Caught by the lava: out of the race. */
+  dnf: boolean;
   /** Lap distance when the current parrot flight began (null when not flying). */
   flightStart: number | null;
   /** Seconds before another wall bonk can register. */
@@ -83,7 +87,8 @@ export class RaceSim {
 
   constructor(def: TrackDef, opts: RaceOptions = {}) {
     this.track = new Track(def);
-    this.laps = opts.laps ?? RACE.laps;
+    // A point-to-point track is one "lap", start line to finish line.
+    this.laps = this.track.closed ? (opts.laps ?? RACE.laps) : 1;
     this.rng = new Rng(opts.seed ?? 1);
     this.world = new RAPIER.World({ x: 0, y: -SIM.gravity, z: 0 });
     this.world.timestep = this.dt;
@@ -96,7 +101,7 @@ export class RaceSim {
       this.karts.push(new Kart(RAPIER, this.world, i, pos, yawQuat(yaw)));
       const p = this.track.project(pos);
       this.progress.push({
-        dist: this.track.delta(0, p.s),
+        dist: this.track.closed ? this.track.delta(0, p.s) : p.s - this.track.startS,
         s: p.s,
         lateral: p.lateral,
         lap: 0,
@@ -107,6 +112,7 @@ export class RaceSim {
         grace: 0,
         respawns: 0,
         bonkCooldown: 0,
+        dnf: false,
         flightStart: null,
         lastRespawn: null,
         lapTimes: [],
@@ -129,6 +135,14 @@ export class RaceSim {
         .setCollisionGroups(GROUND_GROUPS),
       ground,
     );
+    // A mountainside (or other shaped ground) under and around the road.
+    const terrain = buildTerrain(this.track);
+    if (terrain) {
+      this.world.createCollider(
+        RAPIER.ColliderDesc.trimesh(terrain.vertices, terrain.indices).setFriction(0.8).setCollisionGroups(GROUND_GROUPS),
+        ground,
+      );
+    }
     for (const hull of this.track.kickerHulls()) {
       const desc = RAPIER.ColliderDesc.convexHull(hull);
       if (desc) this.world.createCollider(desc.setFriction(0.6).setCollisionGroups(GROUND_GROUPS), ground);
@@ -152,7 +166,7 @@ export class RaceSim {
   gridSlot(i: number): { pos: Vec3; yaw: number } {
     const row = Math.floor(i / 2);
     const side = i % 2 === 0 ? -1 : 1;
-    const s = -6 - row * 7 - (side > 0 ? 3 : 0);
+    const s = this.track.startS - 6 - row * 7 - (side > 0 ? 3 : 0);
     const k = this.track.at(s);
     const pos = add(this.track.pointAt(s, side * 3.2), v3(0, 0.9, 0));
     return { pos, yaw: Math.atan2(k.t.x, k.t.z) };
@@ -162,8 +176,18 @@ export class RaceSim {
     return Math.max(0, this.clock - RACE.countdown);
   }
 
+  /** One lap: the loop, or start line to finish line on an open track. */
+  get lapLength(): number {
+    return this.track.closed ? this.track.length : this.track.finishS - this.track.startS;
+  }
+
   get raceLength(): number {
-    return this.laps * this.track.length;
+    return this.laps * this.lapLength;
+  }
+
+  /** Where the lava front is (−∞ on tracks without lava). */
+  get lavaS(): number {
+    return this.phase === 'countdown' ? -Infinity : lavaFront(this.track.def, this.track.startS, this.raceTime);
   }
 
   /** Kart indices ordered first to last. */
@@ -175,6 +199,10 @@ export class RaceSim {
       if (fa !== null && fb !== null) return fa - fb;
       if (fa !== null) return -1;
       if (fb !== null) return 1;
+      // Still running ahead of anyone the lava has taken.
+      const da = this.progress[a]!.dnf;
+      const db = this.progress[b]!.dnf;
+      if (da !== db) return da ? 1 : -1;
       return this.progress[b]!.dist - this.progress[a]!.dist;
     });
   }
@@ -191,7 +219,9 @@ export class RaceSim {
     this.respawned = [];
     if (this.phase === 'countdown' && this.clock >= RACE.countdown) this.phase = 'racing';
     const live = this.phase !== 'countdown';
-    const held = this.karts.map((_, i) => (live ? (inputs[i] ?? NEUTRAL_INPUT) : NEUTRAL_INPUT));
+    const held = this.karts.map((_, i) =>
+      live && !this.progress[i]!.dnf ? (inputs[i] ?? NEUTRAL_INPUT) : NEUTRAL_INPUT,
+    );
 
     for (const kart of this.karts) {
       const pr = this.progress[kart.index]!;
@@ -200,9 +230,9 @@ export class RaceSim {
       if (kart.flying) kart.flyTargetY = Math.max(kart.flyBaseY, this.track.at(pr.s).p.y) + PARROT.altitude;
     }
     this.items.step(dt, this.karts, held, live);
-    for (const kart of this.karts) kart.step(dt, held[kart.index]!);
+    for (const kart of this.karts) if (!this.progress[kart.index]!.dnf) kart.step(dt, held[kart.index]!);
     this.world.step();
-    for (const kart of this.karts) this.track1(kart, held[kart.index]!);
+    for (const kart of this.karts) if (!this.progress[kart.index]!.dnf) this.track1(kart, held[kart.index]!);
   }
 
   /** Lap progress, finishing, and respawns for one kart. */
@@ -231,7 +261,7 @@ export class RaceSim {
     pr.lateral = p.lateral;
     pr.grace = Math.max(0, pr.grace - this.dt);
 
-    const lap = Math.max(0, Math.floor(pr.dist / this.track.length));
+    const lap = Math.max(0, Math.floor(pr.dist / this.lapLength));
     if (lap > pr.lap && pr.finishTime === null) {
       const prevTotal = pr.lapTimes.reduce((a, b) => a + b, 0);
       pr.lapTimes.push(this.raceTime - prevTotal);
@@ -240,6 +270,12 @@ export class RaceSim {
         pr.finishTime = this.raceTime;
         this.finishOrder.push(kart.index);
       }
+    }
+
+    // Caught by the lava — unless the parrot has you up out of it.
+    if (pr.finishTime === null && !kart.flying && p.s < this.lavaS) {
+      this.toast(kart);
+      return;
     }
 
     const sample = this.track.at(p.s);
@@ -270,7 +306,9 @@ export class RaceSim {
     const why = fell ? 'fell' : pr.offTrack > RACE.offTrackTime ? 'offTrack' : pr.stuck > RACE.stuckTime ? 'stuck' : null;
     if (why) {
       pr.lastRespawn = why;
-      this.respawn(kart);
+      // Into a lava fissure is into the lava.
+      if (why === 'fell' && this.track.def.lava && this.track.inGap(p.s)) this.toast(kart);
+      else this.respawn(kart);
     }
   }
 
@@ -303,6 +341,11 @@ export class RaceSim {
   respawn(kart: Kart): void {
     const pr = this.progress[kart.index]!;
     let s = pr.safeS - 3;
+    // Nowhere safe left to put it: the lava already has the spot.
+    if (s < this.lavaS + 6) {
+      this.toast(kart);
+      return;
+    }
     const k = this.track.at(s);
     const lateral = Math.max(-k.halfWidth + 2, Math.min(k.halfWidth - 2, pr.lateral * 0.5));
     const pos = add(this.track.pointAt(s, lateral), add(scale(k.n, 1.0), v3(0, 0.2, 0)));
@@ -318,7 +361,18 @@ export class RaceSim {
 
   /** True once every kart has finished. */
   get allFinished(): boolean {
-    return this.progress.every((p) => p.finishTime !== null);
+    return this.progress.every((p) => p.finishTime !== null || p.dnf);
+  }
+
+  /** The lava takes a kart: it stops where it is, out of the race. */
+  private toast(kart: Kart): void {
+    const pr = this.progress[kart.index]!;
+    pr.dnf = true;
+    kart.out = true;
+    kart.body.setLinvel(v3(), false);
+    kart.body.setAngvel(v3(), false);
+    kart.body.setEnabled(false);
+    this.items.events.push({ type: 'toasted', kart: kart.index, pos: kart.position });
   }
 
   free(): void {

@@ -7,7 +7,7 @@
  *
  *   Drive   W/S or ↑/↓        Steer   A/D or ←/→
  *   Item    Space / Shift     Whack   Q (left) / E (right)
- *   Pause   Esc / P
+ *   Pause   Esc / P               Look back  C (held)
  *
  * Pad (standard mapping): RT/LT pedals, left stick steers, A item,
  * LB/RB whack left/right, Start pauses.
@@ -32,6 +32,13 @@ export class Controls {
   /** Extra sources merged in (touch). */
   readonly sources: InputSource[] = [];
   onPause: (() => void) | null = null;
+
+  /** True while the look-back key (C, or pad Y) is held. */
+  get lookingBack(): boolean {
+    if (this.down('KeyC')) return true;
+    const pad = this.pad();
+    return !!pad && (pad.buttons[3]?.value ?? 0) > 0.5;
+  }
 
   constructor(target: Window = window) {
     target.addEventListener('keydown', (e) => {

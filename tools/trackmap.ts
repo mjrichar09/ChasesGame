@@ -20,7 +20,7 @@ for (const def of TRACKS) {
   // Screen: +X to the left (matches the minimap), +Z up.
   const P = (x: number, z: number) => [20 + (maxX - x) * k, 20 + (maxZ - z) * k] as const;
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="900"><rect width="900" height="900" fill="#234"/>`;
-  for (let i = 0; i < t.samples.length; i++) {
+  for (let i = 0; i < (t.closed ? t.samples.length : t.samples.length - 1); i++) {
     const a = t.samples[i]!;
     const b = t.samples[(i + 1) % t.samples.length]!;
     const r = 1 / Math.max(Math.abs(a.curvature), 1e-4);

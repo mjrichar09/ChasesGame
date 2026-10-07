@@ -9,7 +9,7 @@ for (const s of t.samples) minR = Math.min(minR, 1 / Math.max(Math.abs(s.curvatu
 console.log('tightest radius', minR.toFixed(1));
 let worst = Infinity, at = [0, 0];
 for (let i = 0; i < t.samples.length; i += 2) for (let j = i + 60; j < t.samples.length; j += 2) {
-  if (t.samples.length - (j - i) < 60) continue;
+  if (t.closed && t.samples.length - (j - i) < 60) continue;
   const a = t.samples[i]!.p, b = t.samples[j]!.p;
   const d = Math.hypot(a.x - b.x, a.z - b.z);
   if (d < worst) { worst = d; at = [i, j]; }

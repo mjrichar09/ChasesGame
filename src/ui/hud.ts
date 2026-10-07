@@ -29,6 +29,8 @@ export class Hud {
   private readonly center: HTMLElement;
   private readonly callout: HTMLElement;
   private readonly map: HTMLCanvasElement;
+  private readonly lava: HTMLElement;
+  private readonly heat: HTMLElement;
   private mapPath: Path2D | null = null;
   private mapXf = { x0: 0, z0: 0, k: 1 };
   private lastCount = -1;
@@ -51,6 +53,8 @@ export class Hud {
       </div>
       <canvas class="hud-map" width="180" height="180"></canvas>
       <div class="hud-speed"><span>0</span> km/h</div>
+      <div class="hud-lava"><span class="lbl">LAVA</span> <b>0</b> m</div>
+      <div class="hud-heat"></div>
       <div class="hud-center"></div>
       <div class="hud-callout"></div>`;
     parent.appendChild(this.root);
@@ -65,6 +69,8 @@ export class Hud {
     this.center = q('.hud-center');
     this.callout = q('.hud-callout');
     this.map = q('.hud-map') as HTMLCanvasElement;
+    this.lava = q('.hud-lava');
+    this.heat = q('.hud-heat');
   }
 
   show(on: boolean): void {
@@ -92,7 +98,7 @@ export class Hud {
       if (i === 0) path.moveTo(x, y);
       else path.lineTo(x, y);
     });
-    path.closePath();
+    if (sim.track.closed) path.closePath();
     this.mapPath = path;
   }
 
@@ -117,7 +123,23 @@ export class Hud {
     this.pos.querySelector('.of')!.textContent = `/${sim.karts.length}`;
     this.pos.dataset.place = String(place);
     const lap = Math.min(sim.laps, pr.lap + 1);
-    this.lap.textContent = pr.finishTime !== null ? 'FINISHED' : `LAP ${lap}/${sim.laps}`;
+    if (pr.dnf) this.lap.textContent = 'TOASTED';
+    else if (pr.finishTime !== null) this.lap.textContent = sim.track.closed ? 'FINISHED' : 'ESCAPED!';
+    else if (!sim.track.closed) this.lap.textContent = `ESCAPE ${Math.max(0, Math.min(99, Math.floor((pr.dist / sim.raceLength) * 100)))}%`;
+    else this.lap.textContent = `LAP ${lap}/${sim.laps}`;
+
+    // How close is the lava?
+    const lavaS = sim.lavaS;
+    const hasLava = !!sim.track.def.lava && pr.finishTime === null && !pr.dnf;
+    this.lava.style.display = hasLava ? '' : 'none';
+    let heat = 0;
+    if (hasLava) {
+      const gap = Number.isFinite(lavaS) ? Math.max(0, pr.s - lavaS) : 999;
+      this.lava.querySelector('b')!.textContent = gap > 500 ? '500+' : String(Math.round(gap));
+      this.lava.classList.toggle('near', gap < 60);
+      heat = Math.max(0, 1 - gap / 70);
+    }
+    this.heat.style.opacity = String(heat * (0.75 + Math.sin(performance.now() / 120) * 0.25));
     this.time.textContent = formatTime(pr.finishTime ?? sim.raceTime);
     this.speed.textContent = String(Math.round(Math.max(0, kart.forwardSpeed) * 3.6));
 
@@ -181,6 +203,36 @@ export class Hud {
     c.strokeStyle = '#e9c48a';
     c.lineWidth = 6;
     c.stroke(this.mapPath);
+    // The lava, eating the route from the top.
+    const front = sim.lavaS;
+    if (Number.isFinite(front) && front > 0) {
+      const lavaPath = new Path2D();
+      const end = Math.min(sim.track.samples.length - 1, Math.floor(front));
+      for (let i = 0; i <= end; i += 2) {
+        const p = sim.track.samples[i]!.p;
+        const [x, y] = this.mapPoint(p.x, p.z);
+        if (i === 0) lavaPath.moveTo(x, y);
+        else lavaPath.lineTo(x, y);
+      }
+      c.strokeStyle = '#ff5a10';
+      c.lineWidth = 8;
+      c.stroke(lavaPath);
+      const fp = sim.track.at(front).p;
+      const [fx, fy] = this.mapPoint(fp.x, fp.z);
+      c.fillStyle = '#ffd23a';
+      c.beginPath();
+      c.arc(fx, fy, 5 + Math.sin(performance.now() / 150) * 1.5, 0, Math.PI * 2);
+      c.fill();
+    }
+    // The finish, on a point-to-point course.
+    if (!sim.track.closed) {
+      const fp = sim.track.at(sim.track.finishS).p;
+      const [fx, fy] = this.mapPoint(fp.x, fp.z);
+      c.font = '14px sans-serif';
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      c.fillText('🏁', fx, fy);
+    }
     // Pickups and the river.
     for (const g of sim.track.gaps) {
       const k = sim.track.at((g.s0 + g.s1) / 2);
@@ -194,6 +246,7 @@ export class Hud {
     const order = sim.karts.map((k) => k.index).filter((i) => i !== player);
     order.push(player);
     for (const i of order) {
+      if (sim.progress[i]!.dnf) continue;
       const p = sim.karts[i]!.position;
       const [x, y] = this.mapPoint(p.x, p.z);
       c.beginPath();

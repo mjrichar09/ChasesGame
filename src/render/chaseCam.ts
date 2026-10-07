@@ -31,6 +31,7 @@ export class ChaseCam {
   private placed = false;
   /** 0..1 blend toward the flying framing. */
   private fly = 0;
+  private wasBack = false;
 
   constructor(aspect: number) {
     this.camera = new THREE.PerspectiveCamera(BASE_FOV, aspect, 0.1, 900);
@@ -49,7 +50,7 @@ export class ChaseCam {
     dt: number,
     target: THREE.Vector3,
     rot: THREE.Quaternion,
-    opts: { boosting: boolean; spinning: boolean; flying: boolean; speed: number; track: Track; s: number },
+    opts: { boosting: boolean; spinning: boolean; flying: boolean; speed: number; track: Track; s: number; lookBack?: boolean },
   ): void {
     this.time += dt;
     const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(rot);
@@ -60,7 +61,9 @@ export class ChaseCam {
       d = Math.atan2(Math.sin(d), Math.cos(d));
       this.yaw += d * (1 - Math.exp(-5.5 * dt));
     }
-    const flat = new THREE.Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
+    // Looking back: the same framing, turned round to face what is behind.
+    const back = opts.lookBack ? -1 : 1;
+    const flat = new THREE.Vector3(Math.sin(this.yaw) * back, 0, Math.cos(this.yaw) * back);
     // Pull back a touch with speed — and a lot on the parrot, to see where to go.
     this.fly += ((opts.flying ? 1 : 0) - this.fly) * (1 - Math.exp(-2.5 * dt));
     const dist = DIST + Math.min(opts.speed, 35) * 0.04 + this.fly * 4;
@@ -76,7 +79,8 @@ export class ChaseCam {
     const lookWant = target.clone().addScaledVector(flat, LOOK_AHEAD);
     lookWant.y += LOOK_UP;
 
-    if (!this.placed) {
+    if (!this.placed || opts.lookBack !== this.wasBack) {
+      this.wasBack = !!opts.lookBack;
       this.pos.copy(want);
       this.look.copy(lookWant);
       this.placed = true;

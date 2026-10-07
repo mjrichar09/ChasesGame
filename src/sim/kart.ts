@@ -107,6 +107,8 @@ export class Kart {
   flyBaseY = 0;
   /** Seconds since the parrot let go (large when it never has). */
   sinceFlight = 1e9;
+  /** Out of the race (taken by the lava): items and other karts ignore it. */
+  out = false;
   /** Set by the race each step while the kart is fording a stream. */
   wet = false;
   /** Engine and top-speed multiplier: AI skill and rubber-banding. 1 for players. */

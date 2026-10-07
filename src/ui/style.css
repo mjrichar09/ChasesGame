@@ -303,6 +303,34 @@ button:focus-visible {
   margin-top: 12px;
 }
 
+.difficulty {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  background: rgba(36, 22, 10, 0.75);
+  border-radius: 12px;
+  padding: 6px 8px;
+  pointer-events: auto;
+}
+
+.difficulty span {
+  font-weight: 900;
+  font-size: 14px;
+  margin-right: 2px;
+}
+
+.difficulty button {
+  font-size: 15px;
+  padding: 5px 10px;
+  border-width: 2px;
+  box-shadow: 0 3px 0 var(--ink);
+}
+
+.difficulty button.on {
+  background: var(--banana);
+}
+
 .keys {
   font-size: 14px;
   font-weight: 700;
@@ -488,6 +516,44 @@ button:focus-visible {
   width: 180px;
   height: 180px;
   opacity: 0.92;
+}
+
+.hud-lava {
+  position: absolute;
+  left: calc(16px + var(--safe-l));
+  top: calc(150px + var(--safe-t));
+  font-size: 22px;
+  color: #ffb08a;
+  text-shadow: 2px 2px 0 var(--ink), -1px -1px 0 var(--ink), 1px -1px 0 var(--ink), -1px 1px 0 var(--ink);
+}
+
+.hud-lava b {
+  font-size: 30px;
+  color: #ff6a1a;
+  font-variant-numeric: tabular-nums;
+}
+
+.hud-lava.near {
+  animation: pulse 0.4s ease-in-out infinite alternate;
+}
+
+.hud-lava.near b {
+  color: #ffd23a;
+}
+
+@keyframes pulse {
+  to {
+    transform: scale(1.15);
+  }
+}
+
+/* The edges of the screen glow when the lava is right behind you. */
+.hud-heat {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(ellipse at center, transparent 55%, rgba(255, 70, 10, 0.55) 100%);
 }
 
 .hud-speed {
@@ -709,6 +775,13 @@ button:focus-visible {
   }
   .hud-speed {
     display: none;
+  }
+  .hud-lava {
+    top: calc(104px + var(--safe-t));
+    font-size: 16px;
+  }
+  .hud-lava b {
+    font-size: 22px;
   }
   .hud-center {
     font-size: 96px;

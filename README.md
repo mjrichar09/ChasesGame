@@ -9,7 +9,12 @@ slide into the logs.
 
 - **Vine Valley** — sunny and fast, with a river gap to clear.
 - **Canopy Creek** — deep under a full jungle canopy; tight turns and a creek to ford twice.
-- **Treetop Tangle** — thirty metres up along giant branches; tree-to-tree leaps and no railing on the bare stretches.
+- **Treetop Tangle** — thirty metres up along the tops of giant branches; tree-to-tree leaps and no railing on the bare stretches.
+- **Lava Run** — the volcano is erupting: race point to point down the mountain with the lava
+  chasing you. It is a little slower than a clean run and much faster than a crash. Caught is out.
+
+Pick your rivals: **Chill**, **Normal** or **Wild**. Every field is a spread of skill, from rookies
+who brake early, wobble and waste their items to an ace or two who don't.
 
 ## Play
 ```
@@ -23,6 +28,7 @@ npm run dev        # http://localhost:5174
 | Steer | A D / ← → | left stick | drag on the left half |
 | Banana (or snake) | Space | A | 🍌 button |
 | Whack left / right | Q / E | LB / RB | 🐍 buttons |
+| Look back | C (hold) | Y | — |
 | Pause | Esc | Start | — |
 
 ## Items

@@ -45,7 +45,8 @@ export type ItemEvent =
   | { type: 'swing'; kart: number; side: -1 | 1; pos: Vec3 }
   | { type: 'whack'; kart: number; victim: number; pos: Vec3 }
   | { type: 'bonk'; kart: number; pos: Vec3; strength: number }
-  | { type: 'parrot'; kart: number; pos: Vec3 };
+  | { type: 'parrot'; kart: number; pos: Vec3 }
+  | { type: 'toasted'; kart: number; pos: Vec3 };
 
 const rising = (now: boolean, before: boolean) => now && !before;
 
@@ -96,6 +97,7 @@ export class Items {
     for (const peel of this.peels) peel.age += dt;
 
     for (const kart of karts) {
+      if (kart.out) continue;
       const pos = kart.position;
       this.collect(kart, pos);
       if (canUse) this.use(kart, inputs[kart.index]!, karts);
@@ -160,7 +162,10 @@ export class Items {
     let at = add(pos, scale(f, -2.2));
     const proj = this.track.project(at, -1);
     const k = this.track.at(proj.s);
-    if (k.road) at = sub(at, scale(k.n, proj.height - this.track.kickerHeight(proj.s, proj.lateral)));
+    if (k.road) {
+      const surface = this.track.kickerHeight(proj.s, proj.lateral) - this.track.surfaceDrop(proj.lateral, k.halfWidth);
+      at = sub(at, scale(k.n, proj.height - surface));
+    }
     this.peels.push({ id: this.nextPeel++, pos: at, yaw: Math.atan2(f.x, f.z), owner: kart.index, age: 0 });
     if (this.peels.length > ITEMS.maxPeels) this.peels.shift();
     this.events.push({ type: 'peelDrop', kart: kart.index, pos: at });
@@ -173,7 +178,7 @@ export class Items {
     const fwd = kart.forward;
     let best: { kart: Kart; d: number } | null = null;
     for (const other of karts) {
-      if (other === kart || other.flying) continue;
+      if (other === kart || other.flying || other.out) continue;
       const rel = sub(other.position, pos);
       const lat = dot(rel, right) * side;
       const lon = dot(rel, fwd);

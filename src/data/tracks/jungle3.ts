@@ -39,7 +39,7 @@ export const TREETOP_TANGLE: TrackDef = {
   features: [
     // Tree-to-tree leaps.
     { kind: 'gap', at: 4, offset: 10, length: 9, rampLength: 9, rampHeight: 1.9 },
-    { kind: 'gap', at: 14, offset: 22, length: 9, rampLength: 9, rampHeight: 1.9 },
+    { kind: 'gap', at: 14, offset: 32, length: 9, rampLength: 9, rampHeight: 1.9 },
     // Bare branches: no railing.
     { kind: 'open', at: 10, offset: 4, length: 46, side: 0 },
     { kind: 'open', at: 17, offset: 12, length: 24, side: -1 },

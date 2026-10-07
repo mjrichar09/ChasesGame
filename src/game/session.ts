@@ -24,7 +24,7 @@ import { KartView } from '../render/kartView.js';
 import { Stage } from '../render/scene.js';
 import { type TrackView, buildTrackView } from '../render/trackView.js';
 import { toon } from '../render/toon.js';
-import { AiDriver, personality } from '../sim/driver.js';
+import { AiDriver, type Difficulty, fieldLevels, personality } from '../sim/driver.js';
 import { type DriverInput, NEUTRAL_INPUT } from '../sim/input.js';
 import { Items } from '../sim/items.js';
 import { RaceSim } from '../sim/race.js';
@@ -79,10 +79,12 @@ export class Game {
   private wasAir: boolean[] = [];
   private wasWet: boolean[] = [];
   private flapTimer = 0;
+  private eruptTimer = 0;
   private warned = false;
   private lastLap = 0;
   private playerFinishedAt: number | null = null;
   private seed = 1;
+  private difficulty: Difficulty = loadDifficulty();
 
   // Menu preview.
   private preview: KartView | null = null;
@@ -115,6 +117,15 @@ export class Game {
     this.menu.onGesture = () => this.sound.unlock();
     this.menu.onPreview = (i) => this.showPreview(i);
     this.menu.onTrack = (i) => this.selectTrack(i);
+    this.menu.difficulty = this.difficulty;
+    this.menu.onDifficulty = (d) => {
+      this.difficulty = d;
+      try {
+        localStorage.setItem('jj-difficulty', d);
+      } catch {
+        // Storage blocked — the choice just lasts this visit.
+      }
+    };
     this.menu.onStart = (i) => {
       this.chosen = i;
       this.startRace();
@@ -220,7 +231,12 @@ export class Game {
       [others[i], others[j]] = [others[j]!, others[i]!];
     }
     this.roster = sim.karts.map((_, i) => (i === this.player ? GORILLAS[this.chosen]! : others.shift()!));
-    this.drivers = sim.karts.map((k) => new AiDriver(personality(sim.rng, k.index)));
+    // A spread of skill across the field, set by the difficulty.
+    const levels = fieldLevels(this.difficulty, sim.karts.length - 1, new Rng(this.seed + 7));
+    let next = 0;
+    this.drivers = sim.karts.map(
+      (k) => new AiDriver(personality(sim.rng, k.index, k.index === this.player ? 0.8 : levels[next++]!)),
+    );
     this.views = sim.karts.map((k, i) => {
       const v = new KartView(this.roster[i]!);
       v.capture(k, true);
@@ -263,7 +279,7 @@ export class Game {
     this.acc += dt;
     const human: DriverInput = this.controls.sample(dt);
     const playerPr = sim.progress[this.player]!;
-    const playerDone = playerPr.finishTime !== null;
+    const playerDone = playerPr.finishTime !== null || playerPr.dnf;
     while (this.acc >= sim.dt) {
       this.acc -= sim.dt;
       const inputs = sim.karts.map((k, i) => {
@@ -283,7 +299,11 @@ export class Game {
       this.sound.play('lap');
       this.hud.shout(playerPr.lap === sim.laps - 1 ? 'FINAL LAP!' : `LAP ${playerPr.lap + 1}`, 'lap');
     }
-    if (playerDone && this.playerFinishedAt === null) {
+    if (playerDone && this.playerFinishedAt === null && playerPr.dnf) {
+      this.playerFinishedAt = this.time;
+      this.sound.stopEngine();
+      this.hud.shout('TOASTED!', 'bad', 3);
+    } else if (playerDone && this.playerFinishedAt === null) {
       this.playerFinishedAt = this.time;
       this.sound.play('finish');
       const place = sim.position(this.player);
@@ -304,9 +324,11 @@ export class Game {
       gorilla: this.roster[i]!,
       time: sim.progress[i]!.finishTime,
       player: i === this.player,
+      dnf: sim.progress[i]!.dnf,
     }));
     this.menu.results(rows);
-    this.buildFinishPodium(sim.standings().slice(0, 3));
+    // Only karts that actually finished get a step.
+    this.buildFinishPodium(sim.standings().filter((i) => sim.progress[i]!.finishTime !== null).slice(0, 3));
   }
 
   /**
@@ -316,7 +338,8 @@ export class Game {
   private buildFinishPodium(top: number[]): void {
     const group = new THREE.Group();
     const venue = this.venues[this.trackIndex]!.track;
-    const k = venue.at(-30);
+    // By the start line of a loop; past the finish of a point-to-point.
+    const k = venue.at(venue.closed ? -30 : venue.finishS + 22);
     group.position.set(k.p.x, k.p.y, k.p.z);
     // Face back down the straight, toward where the camera will be.
     group.rotation.y = Math.atan2(k.t.x, k.t.z) + Math.PI;
@@ -396,6 +419,12 @@ export class Game {
           this.fx.emit({ pos: v(e.pos).setY(e.pos.y + 3), count: 20, color: [0xd8262b, 0xffcf2e, 0x2a6fd8], speed: [2, 6], size: [0.3, 0.6], life: [0.5, 1.0], gravity: 3 });
           if (e.kart === this.player) this.hud.shout('PARROT AIRLINES!', 'good', 1.2);
           break;
+        case 'toasted':
+          this.fx.emit({ pos: v(e.pos).setY(e.pos.y + 0.5), count: 30, color: [0xff6a1a, 0xffd23a, 0xff3a0a], speed: [3, 9], dir: new THREE.Vector3(0, 1, 0), spread: 0.7, size: [0.5, 1.1], life: [0.5, 1.2], gravity: 6 });
+          this.fx.emit({ pos: v(e.pos).setY(e.pos.y + 1), count: 16, color: [0x3a3330, 0x55504c], speed: [1, 3], dir: new THREE.Vector3(0, 1, 0), spread: 0.4, size: [1.5, 2.6], life: [1.5, 2.5], drag: 0.6 });
+          if (vol > 0) this.sound.play('splash', vol);
+          if (e.kart !== this.player && vol > 0.2) this.hud.shout(`${this.roster[e.kart]!.name.toUpperCase()} TOASTED`, 'bad', 1.2);
+          break;
         case 'bonk':
           // Splinters and dust off the logs.
           this.fx.emit({ pos: v(e.pos), count: Math.round(6 + e.strength * 14), color: [0x8a5a33, 0xd2b07a], speed: [2, 6], size: [0.25, 0.6], life: [0.3, 0.7], gravity: 8 });
@@ -428,7 +457,7 @@ export class Game {
       }
       if (i === this.player) {
         this.cam.cut();
-        if (pr.lastRespawn === 'fell') this.hud.shout(wet ? 'SPLASH!' : 'TIMBERRR!', 'bad');
+        if (pr.lastRespawn === 'fell') this.hud.shout(wet ? 'SPLASH!' : LOOKS[sim.track.def.id]?.branches ? 'TIMBERRR!' : 'WHOOPS!', 'bad');
       }
     }
 
@@ -447,12 +476,45 @@ export class Game {
     });
   }
 
+  /** The crater: lava bombs arcing out now and then. */
+  private erupt(dt: number, crater: THREE.Vector3): void {
+    this.eruptTimer -= dt;
+    if (this.eruptTimer > 0) return;
+    this.eruptTimer = 0.25 + Math.random() * 1.2;
+    const burst = Math.random() < 0.15;
+    this.fx.emit({
+      pos: crater.clone().setY(crater.y + 4),
+      count: burst ? 40 : 8,
+      color: [0xff6a1a, 0xffd23a, 0xff3a0a],
+      speed: burst ? [18, 34] : [10, 22],
+      dir: new THREE.Vector3(0, 1, 0),
+      spread: 0.55,
+      size: [1.2, 2.6],
+      life: [2.0, 3.5],
+      gravity: 12,
+      drag: 0.15,
+    });
+    if (burst && this.sim) this.cam.kick(0.15);
+  }
+
   /** Per-frame effects: dust, boost flames. */
   private ambientFx(sim: RaceSim): void {
     const camPos = this.cam.camera.position;
+    // Smoke and sparks boiling off the lava front, when it is in view.
+    const front = sim.lavaS;
+    if (Number.isFinite(front) && front > 0) {
+      const k = sim.track.at(front);
+      const p = new THREE.Vector3(k.p.x, k.p.y + 0.6, k.p.z);
+      if (p.distanceTo(camPos) < 160 && Math.random() < 0.7) {
+        const lat = (Math.random() * 2 - 1) * (k.halfWidth + 6);
+        p.add(new THREE.Vector3(k.r.x * lat, 0, k.r.z * lat));
+        this.fx.emit({ pos: p, count: 1, color: [0x4a3c36, 0x2e2826], speed: [1, 3], dir: new THREE.Vector3(0, 1, 0), spread: 0.3, size: [2, 3.5], life: [1.5, 2.5], drag: 0.5 });
+        this.fx.emit({ pos: p, count: 2, color: [0xffd23a, 0xff6a1a], speed: [3, 7], dir: new THREE.Vector3(0, 1, 0), spread: 0.6, size: [0.25, 0.5], life: [0.4, 0.9], gravity: 6 });
+      }
+    }
     sim.karts.forEach((k, i) => {
       const view = this.views[i]!;
-      if (view.pos.distanceTo(camPos) > 80) return;
+      if (view.pos.distanceTo(camPos) > 80 || k.out) return;
       const speed = Math.abs(k.forwardSpeed);
       if (k.grounded >= 2 && speed > 6 && Math.random() < speed / 40) {
         const back = new THREE.Vector3(0, -0.9, -1).applyQuaternion(view.rot).add(view.pos);
@@ -493,7 +555,9 @@ export class Game {
     const dt = this.last ? Math.min(MAX_FRAME, (now - this.last) / 1000) : 0;
     this.last = now;
     this.time += dt;
-    this.venues[this.trackIndex]?.view.update(this.time);
+    const venue = this.venues[this.trackIndex];
+    venue?.view.update(this.time, this.sim && this.state !== 'menu' ? this.sim.lavaS : -Infinity);
+    if (venue?.view.crater && this.state !== 'paused') this.erupt(dt, venue.view.crater);
 
     const sim = this.sim;
     if (sim && (this.state === 'race' || this.state === 'results')) {
@@ -515,6 +579,7 @@ export class Game {
           boosting: kart.boosting,
           spinning: kart.spinning,
           flying: kart.flying,
+          lookBack: this.controls.lookingBack,
           speed: kart.forwardSpeed,
           track: sim.track,
           s: sim.progress[this.player]!.s,
@@ -613,4 +678,14 @@ function textTexture(text: string, fill: string, ink: string): THREE.CanvasTextu
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
+}
+
+function loadDifficulty(): Difficulty {
+  try {
+    const d = localStorage.getItem('jj-difficulty');
+    if (d === 'chill' || d === 'normal' || d === 'wild') return d;
+  } catch {
+    // Storage blocked.
+  }
+  return 'normal';
 }

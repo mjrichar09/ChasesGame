@@ -38,6 +38,8 @@ export interface TrackLook {
   riverUnderGaps: boolean;
   /** Branches under the road, giant trees, and a sea of treetops below. */
   branches: boolean;
+  /** Glowing lava down in the road gaps (a fissure) instead of water. */
+  gapLava?: boolean;
 }
 
 export const LOOKS: Record<string, TrackLook> = {
@@ -104,5 +106,27 @@ export const LOOKS: Record<string, TrackLook> = {
     barrier: 'vines',
     riverUnderGaps: false,
     branches: true,
+  },
+  'lava-run': {
+    blurb: 'The volcano is erupting. Get down the mountain before the lava does.',
+    skyTop: 0x3a1f22,
+    skyHorizon: 0xd0703a,
+    fog: 0x8a5038,
+    fogNear: 70,
+    fogFar: 420,
+    hemiSky: 0xffd0a8,
+    hemiGround: 0x3a2a20,
+    hemiIntensity: 1.15,
+    sun: 0xffb070,
+    sunIntensity: 1.7,
+    ground: '#3f5a2a',
+    canopy: false,
+    vineArches: false,
+    scenery: 0.45,
+    road: 'dirt',
+    barrier: 'logs',
+    riverUnderGaps: false,
+    branches: false,
+    gapLava: true,
   },
 };

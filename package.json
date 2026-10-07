@@ -17,7 +17,8 @@
     "trace": "tsx tools/trace.ts",
     "braking": "tsx tools/braking.ts",
     "trackmap": "tsx tools/trackmap.ts",
-    "celebrations": "tsx tools/celebrations.ts"
+    "celebrations": "tsx tools/celebrations.ts",
+    "levels": "tsx tools/levels.ts"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.14.0",

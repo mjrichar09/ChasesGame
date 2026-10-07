@@ -31,6 +31,7 @@ Playwright. Deploys to GitHub Pages (`.github/workflows/pages.yml`).
 - `npm run trackcheck` / `npm run trackmap` — layout sanity (overlaps, inside-edge
   clearance) and a plan-view PNG per track in `shots/`.
 - `npm run celebrations` — every gorilla's celebration, screenshotted (dev server running).
+- `npm run levels` — clean solo lap time per AI level (0 rookie … 1 ace) on each track.
 - With `npm run dev` running: `npm run shoot`, `npm run shoot:mobile`,
   `npm run racecheck` (full 1-lap autopilot race to the results screen).
   Screenshots land in `shots/`.
@@ -44,6 +45,14 @@ Playwright. Deploys to GitHub Pages (`.github/workflows/pages.yml`).
 - The track builder relaxes any corner tighter than half the road width + 2.5 m;
   sharper and the inside edge folds and barrier boxes poke across the road.
 - Tracks live in `src/data/tracks/` (`index.ts` lists them, `looks.ts` styles them).
+  A `TrackDef` can be `open` (point to point: `Track.closed` false, `startS`/`finishS`;
+  `wrap`/`delta`/`between` clamp instead of wrapping), `elevated` (branches: crowned
+  road via `surfaceDrop`, no skirts), have `terrain` (sim/terrain.ts: physics + render
+  ground from a height function) and `lava` (sim/lava.ts: a front that DNFs karts it
+  catches on the ground; parrot flight is safe until you land).
+- AI skill: every derived trait comes from `Personality.level`; a field's levels come
+  from `fieldLevels(difficulty)`. Tools/tests that need a *good* driver pass level 1
+  explicitly — the default personality is a mid-field driver.
 - Lap progress normally only searches ±40 m of the last position (no shortcuts).
   During a parrot flight (+2.5 s) it searches the whole lap, accepting forward
   jumps up to `PARROT.maxSkip` of a lap per flight, so flying shortcuts count

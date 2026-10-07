@@ -15,7 +15,7 @@ for (const def of defs) {
   console.log(`\n${def.name}`);
   for (const grip of [12, 15, 18, 22, 28, 9999]) {
     const sim = new RaceSim({ ...def, pickups: [] }, { karts: 1, laps: 1, seed: 1 });
-    const me = { ...personality(sim.rng, 0), lane: 0, weave: 0, skill: 1, cornerGrip: grip };
+    const me = { ...personality(sim.rng, 0, 1), lane: 0, weave: 0, skill: 1, cornerGrip: grip, steerNoise: 0, mistakes: 0 };
     const ai = new AiDriver(me);
     const kart = sim.karts[0]!;
     const pr = sim.progress[0]!;

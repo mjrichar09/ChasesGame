@@ -3,5 +3,6 @@ import type { TrackDef } from '../../sim/track.js';
 import { VINE_VALLEY } from './jungle1.js';
 import { CANOPY_CREEK } from './jungle2.js';
 import { TREETOP_TANGLE } from './jungle3.js';
+import { LAVA_RUN } from './volcano.js';
 
-export const TRACKS: readonly TrackDef[] = [VINE_VALLEY, CANOPY_CREEK, TREETOP_TANGLE];
+export const TRACKS: readonly TrackDef[] = [VINE_VALLEY, CANOPY_CREEK, TREETOP_TANGLE, LAVA_RUN];

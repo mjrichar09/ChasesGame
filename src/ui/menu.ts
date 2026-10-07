@@ -8,6 +8,7 @@
 
 import { GORILLAS, type Gorilla } from '../data/gorillas.js';
 import { TRACKS } from '../data/tracks/index.js';
+import type { Difficulty } from '../sim/driver.js';
 import { LOOKS } from '../data/tracks/looks.js';
 import { escapeHtml } from './escape.js';
 import { formatTime, ordinal } from './hud.js';
@@ -18,6 +19,8 @@ export interface ResultRow {
   gorilla: Gorilla;
   time: number | null;
   player: boolean;
+  /** Caught by the lava. */
+  dnf?: boolean;
 }
 
 export class Menu {
@@ -25,6 +28,8 @@ export class Menu {
   onStart: ((gorilla: number) => void) | null = null;
   onPreview: ((gorilla: number) => void) | null = null;
   onTrack: ((track: number) => void) | null = null;
+  onDifficulty: ((d: Difficulty) => void) | null = null;
+  difficulty: Difficulty = 'normal';
   onResume: (() => void) | null = null;
   onRestart: (() => void) | null = null;
   onQuit: (() => void) | null = null;
@@ -87,7 +92,13 @@ export class Menu {
         <div class="cards">${cards}</div>
         <div class="select-foot">
           <div class="keys">
-            <b>Drive</b> W/S or ↑↓ · <b>Steer</b> A/D or ←→ · <b>Banana / item</b> Space · <b>Whack</b> Q / E · <b>Pause</b> Esc
+            <b>Drive</b> W/S or ↑↓ · <b>Steer</b> A/D or ←→ · <b>Banana / item</b> Space · <b>Whack</b> Q / E · <b>Look back</b> C · <b>Pause</b> Esc
+          </div>
+          <div class="difficulty" role="radiogroup" aria-label="Opponents">
+            <span>Rivals</span>
+            ${(['chill', 'normal', 'wild'] as const)
+              .map((d) => `<button data-d="${d}" class="${d === this.difficulty ? 'on' : ''}">${d[0]!.toUpperCase() + d.slice(1)}</button>`)
+              .join('')}
           </div>
           <button class="big go">RACE!</button>
         </div>
@@ -106,6 +117,13 @@ export class Menu {
       b.addEventListener('click', () => {
         this.onGesture?.();
         this.pickTrack(Number(b.dataset.t));
+      });
+    }
+    for (const b of this.root.querySelectorAll<HTMLButtonElement>('.difficulty button')) {
+      b.addEventListener('click', () => {
+        this.difficulty = b.dataset.d as Difficulty;
+        for (const o of this.root.querySelectorAll('.difficulty button')) o.classList.toggle('on', o === b);
+        this.onDifficulty?.(this.difficulty);
       });
     }
     this.pickTrack(track);
@@ -158,11 +176,12 @@ export class Menu {
         <tr class="${r.player ? 'me' : ''}">
           <td class="p">${ordinal(i + 1)}</td>
           <td><span class="swatch" style="background:${hex(r.gorilla.accent)}"></span>${escapeHtml(r.gorilla.name)}</td>
-          <td class="t">${r.time === null ? '—' : formatTime(r.time)}</td>
+          <td class="t">${r.dnf ? '🔥 TOASTED' : r.time === null ? '—' : formatTime(r.time)}</td>
         </tr>`,
       )
       .join('');
-    const cheer = me === 1 ? 'TOP BANANA!' : me <= 3 ? 'ON THE PODIUM!' : 'BANANA PEELED…';
+    const toasted = rows.find((r) => r.player)?.dnf;
+    const cheer = toasted ? 'TOASTED!' : me === 1 ? 'TOP BANANA!' : me <= 3 ? 'ON THE PODIUM!' : 'BANANA PEELED…';
     this.root.innerHTML = `
       <div class="panel results">
         <h2>${cheer}</h2>

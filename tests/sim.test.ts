@@ -188,6 +188,33 @@ describe('snake', () => {
   });
 });
 
+describe('lava', () => {
+  it('toasts a kart the front catches, and spares one flying over it', async () => {
+    const { LAVA_RUN } = await import('../src/data/tracks/volcano.js');
+    const sim = new RaceSim(LAVA_RUN, { karts: 2, seed: 3 });
+    settle(sim, 120 * 3 + 2);
+    expect(sim.phase).toBe('racing');
+    // Kart 1 takes off on a parrot; kart 0 just sits on the grid.
+    Items.give(sim.karts[1]!, 'parrot');
+    sim.step([press({}), press({ item: true })]);
+    for (let i = 0; i < 120 * 30 && !sim.progress[0]!.dnf; i++) sim.step([press({}), press({})]);
+    expect(sim.progress[0]!.dnf).toBe(true);
+    expect(sim.standings()[1]).toBe(0);
+    // Overtaken by the lava while airborne: still alive until it lands.
+    const flyer = sim.progress[1]!;
+    if (sim.karts[1]!.flying) expect(flyer.dnf).toBe(false);
+  });
+
+  it('is a point to point race: one run, start line to finish line', async () => {
+    const { LAVA_RUN } = await import('../src/data/tracks/volcano.js');
+    const sim = new RaceSim(LAVA_RUN, { karts: 1 });
+    expect(sim.laps).toBe(1);
+    expect(sim.track.closed).toBe(false);
+    expect(sim.raceLength).toBeCloseTo(sim.track.finishS - sim.track.startS);
+    expect(sim.progress[0]!.dist).toBeLessThan(0);
+  });
+});
+
 describe('parrot', () => {
   function airborne(): RaceSim {
     const sim = racing(2);
@@ -280,17 +307,20 @@ describe.each(TRACKS.map((t) => [t.name, t] as const))('%s', (_name, def: TrackD
       r.sim.items.events = [];
     }
     expect(r.sim.allFinished).toBe(true);
+    const laps = def.open ? 1 : 3;
     for (const p of r.sim.progress) {
-      expect(p.lapTimes).toHaveLength(3);
-      expect(p.respawns).toBeLessThan(10);
+      // On an escape track some are caught by the lava — but nobody is stuck.
+      if (!p.dnf) expect(p.lapTimes).toHaveLength(laps);
+      expect(p.respawns).toBeLessThan(14);
     }
+    if (def.lava) expect(r.sim.progress.filter((p) => !p.dnf).length).toBeGreaterThanOrEqual(4);
     r.sim.free();
   }, 180_000);
 
   it('rewards braking: a driver who slows for corners beats one who never lifts', () => {
     const lap = (cornerGrip: number) => {
-      const sim = new RaceSim({ ...def, pickups: [] }, { karts: 1, laps: 1, seed: 1 });
-      const ai = new AiDriver({ ...personality(sim.rng, 0), lane: 0, weave: 0, skill: 1, cornerGrip });
+      const sim = new RaceSim({ ...def, pickups: [], lava: undefined }, { karts: 1, laps: 1, seed: 1 });
+      const ai = new AiDriver({ ...personality(sim.rng, 0, 1), lane: 0, weave: 0, skill: 1, cornerGrip, steerNoise: 0, mistakes: 0 });
       const kart = sim.karts[0]!;
       const pr = sim.progress[0]!;
       for (let i = 0; i < 120 * 180 && pr.finishTime === null; i++) {
@@ -299,7 +329,7 @@ describe.each(TRACKS.map((t) => [t.name, t] as const))('%s', (_name, def: TrackD
       sim.free();
       return pr.finishTime ?? Infinity;
     };
-    const braking = Math.min(lap(15), lap(18));
+    const braking = Math.min(lap(15), lap(18), lap(22), lap(28));
     const flatOut = lap(9999);
     expect(braking).toBeLessThan(flatOut - 1);
   }, 120_000);

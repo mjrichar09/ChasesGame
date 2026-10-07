@@ -86,6 +86,16 @@ export interface TrackDef {
    * road edges — there is nothing under you but a long drop.
    */
   elevated?: boolean;
+  /**
+   * Point to point instead of a loop. The road runs from the first control
+   * point to the last; the start line sits `startOffset` metres in (the grid
+   * fills the road behind it) and the finish `finishOffset` from the end.
+   */
+  open?: { startOffset: number; finishOffset: number };
+  /** Lava chases the field down an open track (see sim/lava.ts). */
+  lava?: { startBehind: number; delay: number; speed0: number; speedMax: number; accel: number };
+  /** Ground shaped by a height function (a mountainside), not a flat floor. */
+  terrain?: { height: (x: number, z: number) => number; margin: number; spacing: number };
 }
 
 export interface Sample {
@@ -137,6 +147,16 @@ export interface Pickup {
   pos: Vec3;
 }
 
+/**
+ * A branch's cross-section is a superellipse |x/a|^n + |y/b|^n = 1 sized to
+ * the road: a little wider than the road, a bit less tall than wide. The top
+ * of it is the road; the rest is drawn as the branch.
+ */
+export const BRANCH_N = 6;
+export function branchProfile(halfWidth: number): { a: number; b: number } {
+  return { a: halfWidth * 1.22, b: halfWidth * 0.6 };
+}
+
 /** Metres between samples. */
 export const DS = 1;
 const MAX_BANK = 0.28;
@@ -161,13 +181,21 @@ export class Track {
   readonly pickups: Pickup[] = [];
   /** `s` of each control point, before the start offset is applied. */
   private readonly pointS: number[];
+  /** A loop (laps) or point to point. */
+  readonly closed: boolean;
+  /** Where the race starts and finishes, in `s`. A loop starts and ends at 0. */
+  readonly startS: number;
+  readonly finishS: number;
 
   constructor(def: TrackDef) {
     this.def = def;
+    this.closed = !def.open;
     const { samples, pointS } = buildSamples(def);
     this.samples = samples;
     this.pointS = pointS;
     this.length = samples.length * DS;
+    this.startS = def.open ? def.open.startOffset : 0;
+    this.finishS = def.open ? this.length - def.open.finishOffset : this.length;
 
     for (const f of def.features) {
       const s = this.anchor(f);
@@ -191,7 +219,7 @@ export class Track {
     for (const row of def.pickups) {
       const s = this.anchor(row);
       for (const lateral of row.lanes) {
-        this.pickups.push({ s, lateral, pos: add(this.pointAt(s, lateral), v3(0, 1.1, 0)) });
+        this.pickups.push({ s, lateral, pos: add(this.pointAt(s, lateral), v3(0, 1.1 - this.surfaceDrop(lateral), 0)) });
       }
     }
     this.buildWalls();
@@ -202,9 +230,17 @@ export class Track {
     return this.wrap((this.pointS[a.at] ?? 0) + (a.offset ?? 0));
   }
 
+  /** Onto the road: round the loop, or clamped to the ends of an open track. */
   wrap(s: number): number {
     const l = this.length;
+    if (!this.closed) return clamp(s, 0, l - 1e-6);
     return ((s % l) + l) % l;
+  }
+
+  /** A sample index, wrapped on a loop or clamped on an open track. */
+  private idx(i: number): number {
+    const n = this.samples.length;
+    return this.closed ? ((i % n) + n) % n : clamp(i, 0, n - 1);
   }
 
   /** Interpolated sample at arc length `s`. */
@@ -212,8 +248,8 @@ export class Track {
     const w = this.wrap(s);
     const i = Math.floor(w / DS);
     const f = w / DS - i;
-    const a = this.samples[i % this.samples.length]!;
-    const b = this.samples[(i + 1) % this.samples.length]!;
+    const a = this.samples[this.idx(i)]!;
+    const b = this.samples[this.idx(i + 1)]!;
     const mix = (u: Vec3, v: Vec3) => v3(u.x + (v.x - u.x) * f, u.y + (v.y - u.y) * f, u.z + (v.z - u.z) * f);
     return {
       s: w,
@@ -231,6 +267,19 @@ export class Track {
   pointAt(s: number, lateral: number): Vec3 {
     const k = this.at(s);
     return add(k.p, scale(k.r, lateral));
+  }
+
+  /**
+   * How far the road surface drops below the centreline at `lateral` metres
+   * from it. Flat (0) on ordinary tracks. On branches the road is the top of
+   * a rounded cross-section — a superellipse — so it falls away toward the
+   * edges and you can feel you are driving on top of a branch.
+   */
+  surfaceDrop(lateral: number, halfWidth = this.def.width / 2): number {
+    if (!this.def.elevated) return 0;
+    const { a, b } = branchProfile(halfWidth);
+    const u = Math.min(1, Math.abs(lateral) / a);
+    return b - b * Math.pow(1 - Math.pow(u, BRANCH_N), 1 / BRANCH_N);
   }
 
   /** True where the barrier on `side` is missing. */
@@ -251,12 +300,14 @@ export class Track {
 
   /** True when `s` lies in [a, b) going forward, allowing for the wrap. */
   between(s: number, a: number, b: number): boolean {
+    if (!this.closed) return s >= a && s < b;
     const span = this.wrap(b - a);
     return this.wrap(s - a) < span;
   }
 
-  /** Signed forward distance from `a` to `b`, in (-L/2, L/2]. */
+  /** Signed forward distance from `a` to `b`, in (-L/2, L/2] on a loop. */
   delta(a: number, b: number): number {
+    if (!this.closed) return b - a;
     let d = this.wrap(b - a);
     if (d > this.length / 2) d -= this.length;
     return d;
@@ -272,14 +323,14 @@ export class Track {
     let best = 0;
     let bestD = Infinity;
     const scan = (i: number) => {
-      const k = this.samples[((i % n) + n) % n]!;
+      const k = this.samples[this.idx(i)]!;
       const dx = pos.x - k.p.x;
       const dz = pos.z - k.p.z;
       const dy = (pos.y - k.p.y) * 0.5;
       const d = dx * dx + dz * dz + dy * dy;
       if (d < bestD) {
         bestD = d;
-        best = ((i % n) + n) % n;
+        best = this.idx(i);
       }
     };
     if (hint < 0) for (let i = 0; i < n; i++) scan(i);
@@ -326,8 +377,10 @@ export class Track {
         const seg = inside ? clamp(innerR * 0.5, 0.5, 4) : 4;
         const next = s + seg;
         if (!this.inGap(s) && !this.inGap(next) && !this.isOpen(s, side) && !this.isOpen(next, side)) {
-          const a = this.pointAt(s, side * (k.halfWidth + WALL_THICK / 2));
-          const b = this.pointAt(next, side * (this.at(next).halfWidth + WALL_THICK / 2));
+          const latA = side * (k.halfWidth + WALL_THICK / 2);
+          const latB = side * (this.at(next).halfWidth + WALL_THICK / 2);
+          const a = add(this.pointAt(s, latA), v3(0, -this.surfaceDrop(latA, k.halfWidth), 0));
+          const b = add(this.pointAt(next, latB), v3(0, -this.surfaceDrop(latB, this.at(next).halfWidth), 0));
           const mid = scale(add(a, b), 0.5);
           const d = sub(b, a);
           const len = Math.hypot(d.x, d.z);
@@ -357,7 +410,8 @@ export class Track {
       verts.push(v.x, v.y, v.z);
       return verts.length / 3 - 1;
     };
-    for (let i = 0; i < n; i++) {
+    if (this.def.elevated) return this.crownedMesh();
+    for (let i = 0; i < (this.closed ? n : n - 1); i++) {
       const a = this.samples[i]!;
       const b = this.samples[(i + 1) % n]!;
       if (!a.road || !b.road) continue;
@@ -376,7 +430,7 @@ export class Track {
         [al, bl, false],
         [ar, br, true],
       ] as const) {
-        if (this.def.elevated || (top0.y < 0.05 && top1.y < 0.05)) continue;
+        if (this.def.elevated || this.def.terrain || (top0.y < 0.05 && top1.y < 0.05)) continue;
         const j0 = push(top0);
         const j1 = push(top1);
         const j2 = push(v3(top0.x, -0.5, top0.z));
@@ -384,6 +438,36 @@ export class Track {
         // Facing outward from the road.
         if (flip) idx.push(j0, j2, j1, j1, j2, j3);
         else idx.push(j0, j1, j2, j1, j3, j2);
+      }
+    }
+    return { vertices: new Float32Array(verts), indices: new Uint32Array(idx) };
+  }
+
+  /** The road of a branch track: crowned across, no skirts. */
+  private crownedMesh(): { vertices: Float32Array; indices: Uint32Array } {
+    const COLS = 10;
+    const verts: number[] = [];
+    const idx: number[] = [];
+    const n = this.samples.length;
+    const row = (k: Sample) => {
+      const start = verts.length / 3;
+      const edge = k.halfWidth + WALL_THICK;
+      for (let j = 0; j <= COLS; j++) {
+        const lat = -edge + (2 * edge * j) / COLS;
+        const p = add(k.p, scale(k.r, lat));
+        verts.push(p.x, p.y - this.surfaceDrop(lat, k.halfWidth), p.z);
+      }
+      return start;
+    };
+    for (let i = 0; i < (this.closed ? n : n - 1); i++) {
+      const a = this.samples[i]!;
+      const b = this.samples[(i + 1) % n]!;
+      if (!a.road || !b.road) continue;
+      const ra = row(a);
+      const rb = row(b);
+      for (let j = 0; j < COLS; j++) {
+        // Wound so the face normal points up (right is -X when facing +Z).
+        idx.push(ra + j, ra + j + 1, rb + j, ra + j + 1, rb + j + 1, rb + j);
       }
     }
     return { vertices: new Float32Array(verts), indices: new Uint32Array(idx) };
@@ -400,7 +484,8 @@ export class Track {
         const h = (k.height * i) / steps;
         const smp = this.at(s);
         for (const side of [-1, 1]) {
-          const base = this.pointAt(s, k.lateral + side * k.halfWidth);
+          const lat = k.lateral + side * k.halfWidth;
+          const base = add(this.pointAt(s, lat), v3(0, -this.surfaceDrop(lat, smp.halfWidth), 0));
           // Sink the base a little so the ramp's leading edge is flush, not a step.
           pts.push(base.x - smp.n.x * 0.15, base.y - smp.n.y * 0.15, base.z - smp.n.z * 0.15);
           pts.push(base.x + smp.n.x * h, base.y + smp.n.y * h, base.z + smp.n.z * h);
@@ -426,12 +511,13 @@ const MIN_INNER_RADIUS = 2.5;
  * toward its neighbours' midpoint — until the radius everywhere is at least
  * half the width plus `MIN_INNER_RADIUS`. Heights are left alone.
  */
-function relaxTightCorners(raw: { p: Vec3; w: number }[]): void {
+function relaxTightCorners(raw: { p: Vec3; w: number }[], closed: boolean): void {
   const n = raw.length;
+  const at = (i: number) => raw[closed ? ((i % n) + n) % n : clamp(i, 0, n - 1)]!;
   const radius = (i: number): number => {
-    const a = raw[(i - 3 + n) % n]!.p;
+    const a = at(i - 3).p;
     const b = raw[i]!.p;
-    const c = raw[(i + 3) % n]!.p;
+    const c = at(i + 3).p;
     const ab = Math.hypot(b.x - a.x, b.z - a.z);
     const bc = Math.hypot(c.x - b.x, c.z - b.z);
     const ca = Math.hypot(a.x - c.x, a.z - c.z);
@@ -440,13 +526,13 @@ function relaxTightCorners(raw: { p: Vec3; w: number }[]): void {
   };
   for (let pass = 0; pass < 400; pass++) {
     let moved = false;
-    for (let i = 0; i < n; i++) {
+    for (let i = closed ? 0 : 4; i < (closed ? n : n - 4); i++) {
       if (radius(i) >= raw[i]!.w / 2 + MIN_INNER_RADIUS) continue;
       // Ease a small neighbourhood so the fix spreads rather than kinking.
       for (let k = -2; k <= 2; k++) {
-        const j = (i + k + n) % n;
-        const prev = raw[(j - 1 + n) % n]!.p;
-        const next = raw[(j + 1) % n]!.p;
+        const j = closed ? (i + k + n) % n : clamp(i + k, 1, n - 2);
+        const prev = at(j - 1).p;
+        const next = at(j + 1).p;
         const p = raw[j]!.p;
         const w = 0.35 * (1 - Math.abs(k) * 0.3);
         p.x += ((prev.x + next.x) / 2 - p.x) * w;
@@ -481,14 +567,19 @@ function buildSamples(def: TrackDef): { samples: Sample[]; pointS: number[] } {
   const pts = def.points.map((p) => v3(p.x, p.y, p.z));
   const widths = def.points.map((p) => p.width ?? def.width);
   const n = pts.length;
-  const get = <T>(arr: T[], i: number) => arr[((i % n) + n) % n]!;
+  const closed = !def.open;
+  const get = <T>(arr: T[], i: number) => arr[closed ? ((i % n) + n) % n : clamp(i, 0, n - 1)]!;
 
   // Dense polyline with cumulative length, starting at the start point.
   const dense: { p: Vec3; w: number }[] = [];
   const densePointIndex: number[] = [];
   const SUB = 60;
-  for (let k = 0; k < n; k++) {
-    const i = def.start + k;
+  // A loop has a segment per point (the last closes back to the first); an
+  // open road runs point 0 to the last, then ends on that point.
+  const first = closed ? def.start : 0;
+  const segments = closed ? n : n - 1;
+  for (let k = 0; k < segments; k++) {
+    const i = first + k;
     densePointIndex.push(dense.length);
     for (let j = 0; j < SUB; j++) {
       const t = j / SUB;
@@ -498,17 +589,22 @@ function buildSamples(def: TrackDef): { samples: Sample[]; pointS: number[] } {
       });
     }
   }
+  if (!closed) {
+    densePointIndex.push(dense.length);
+    dense.push({ p: pts[n - 1]!, w: widths[n - 1]! });
+  }
   const cum = [0];
-  for (let i = 1; i <= dense.length; i++) {
+  const ends = closed ? dense.length : dense.length - 1;
+  for (let i = 1; i <= ends; i++) {
     cum.push(cum[i - 1]! + length(sub(dense[i % dense.length]!.p, dense[i - 1]!.p)));
   }
-  const total = cum[dense.length]!;
+  const total = cum[ends]!;
   const count = Math.round(total / DS);
   const scaleS = total / count;
 
   const pointS: number[] = new Array(n).fill(0);
   densePointIndex.forEach((di, k) => {
-    pointS[(def.start + k) % n] = (cum[di]! / total) * count * DS;
+    pointS[(first + k) % n] = (cum[di]! / total) * count * DS;
   });
 
   // Resample at uniform arc length.
@@ -522,12 +618,13 @@ function buildSamples(def: TrackDef): { samples: Sample[]; pointS: number[] } {
     const b = dense[(j + 1) % dense.length]!;
     raw.push({ p: add(a.p, scale(sub(b.p, a.p), f)), w: a.w + (b.w - a.w) * f });
   }
-  relaxTightCorners(raw);
+  relaxTightCorners(raw, !def.open);
 
   const up = v3(0, 1, 0);
-  const tangents = raw.map((_, i) => normalize(sub(raw[(i + 1) % count]!.p, raw[(i - 1 + count) % count]!.p)));
+  const wrapI = (i: number) => (closed ? ((i % count) + count) % count : clamp(i, 0, count - 1));
+  const tangents = raw.map((_, i) => normalize(sub(raw[wrapI(i + 1)]!.p, raw[wrapI(i - 1)]!.p)));
   const curv = tangents.map((t, i) => {
-    const t2 = tangents[(i + 1) % count]!;
+    const t2 = tangents[wrapI(i + 1)]!;
     const h1 = normalize(v3(t.x, 0, t.z));
     const h2 = normalize(v3(t2.x, 0, t2.z));
     return cross(h1, h2).y / DS;
@@ -536,7 +633,7 @@ function buildSamples(def: TrackDef): { samples: Sample[]; pointS: number[] } {
   const smooth = curv.map((_, i) => {
     let sum = 0;
     const R = 8;
-    for (let k = -R; k <= R; k++) sum += curv[(i + k + count) % count]!;
+    for (let k = -R; k <= R; k++) sum += curv[wrapI(i + k)]!;
     return sum / (2 * R + 1);
   });
 
