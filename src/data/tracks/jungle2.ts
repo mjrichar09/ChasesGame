@@ -57,6 +57,9 @@ export const CANOPY_CREEK: TrackDef = {
     { kind: 'stream', at: 14, width: 12, skew: -0.15 },
     { kind: 'kicker', at: 0, offset: 20, length: 7, height: 1.2 },
   ],
+  // FLASH FLOOD: the creek rises on lap 2 and again on lap 3 — wider fords,
+  // deeper water, and a current shoving karts downstream.
+  events: [{ kind: 'flood', lap: 2, grow: 14, current: 3.5, stages: 2 }],
   pickups: [
     { at: 1, offset: 20, lanes: [-4.5, -1.5, 1.5, 4.5] },
     { at: 4, offset: -8, lanes: [-4, 0, 4] },

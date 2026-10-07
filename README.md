@@ -13,6 +13,11 @@ slide into the logs.
 - **Lava Run** — the volcano is erupting: race point to point down the mountain with the lava
   chasing you. It is a little slower than a clean run and much faster than a crash. Caught is out.
 
+The jungle changes mid-race: on Vine Valley a giant tree crashes across the road
+on lap 2 (pick the side its crown didn't land on), Canopy Creek's creek floods on
+laps 2 and 3 (hit the water fast and straight to **skim** across the top — slow down or swerve and you wade), and on Treetop Tangle a cracked branch snaps off on lap 3 — leaving
+a new gap with the broken stub as a ramp.
+
 Pick your rivals: **Chill**, **Normal** or **Wild**. Every field is a spread of skill, from rookies
 who brake early, wobble and waste their items to an ace or two who don't.
 
@@ -29,7 +34,7 @@ npm run dev        # http://localhost:5174
 | Banana (or snake) | Space | A | 🍌 button |
 | Whack left / right | Q / E | LB / RB | 🐍 buttons |
 | Look back | C (hold) | Y | — |
-| Pause | Esc | Start | — |
+| Pause / quit | Esc | Start | ⏸ button |
 
 ## Items
 - **Banana bunch** (floats over a yellow ring): three bananas. Each is a 3 s

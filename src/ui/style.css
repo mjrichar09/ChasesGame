@@ -556,6 +556,19 @@ button:focus-visible {
   background: radial-gradient(ellipse at center, transparent 55%, rgba(255, 70, 10, 0.55) 100%);
 }
 
+.hud-pause {
+  position: absolute;
+  right: calc(122px + var(--safe-r));
+  top: calc(14px + var(--safe-t));
+  width: 52px;
+  height: 52px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 22px;
+  pointer-events: auto;
+  opacity: 0.9;
+}
+
 .hud-speed {
   position: absolute;
   left: calc(18px + var(--safe-l));
@@ -775,6 +788,12 @@ button:focus-visible {
   }
   .hud-speed {
     display: none;
+  }
+  .hud-pause {
+    right: calc(92px + var(--safe-r));
+    width: 44px;
+    height: 44px;
+    font-size: 18px;
   }
   .hud-lava {
     top: calc(104px + var(--safe-t));

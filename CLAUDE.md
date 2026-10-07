@@ -50,6 +50,12 @@ Playwright. Deploys to GitHub Pages (`.github/workflows/pages.yml`).
   road via `surfaceDrop`, no skirts), have `terrain` (sim/terrain.ts: physics + render
   ground from a height function) and `lava` (sim/lava.ts: a front that DNFs karts it
   catches on the ground; parrot flight is safe until you land).
+- Mid-race track changes live in `sim/events.ts` (definitions + timing by leader
+  lap); `RaceSim.applyEvent` makes them physical (new hulls, rebuilt road collider,
+  disabled barrier colliders, wider `waters`, `track.brush`). The renderer reads
+  `sim.events` — it has its own `Track` instance, so never read mutable track
+  state from the render copy during a race.
+- Leaving the page (hidden/blur/pagehide) suspends audio and pauses the race.
 - AI skill: every derived trait comes from `Personality.level`; a field's levels come
   from `fieldLevels(difficulty)`. Tools/tests that need a *good* driver pass level 1
   explicitly — the default personality is a mid-field driver.

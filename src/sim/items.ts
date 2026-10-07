@@ -46,7 +46,8 @@ export type ItemEvent =
   | { type: 'whack'; kart: number; victim: number; pos: Vec3 }
   | { type: 'bonk'; kart: number; pos: Vec3; strength: number }
   | { type: 'parrot'; kart: number; pos: Vec3 }
-  | { type: 'toasted'; kart: number; pos: Vec3 };
+  | { type: 'toasted'; kart: number; pos: Vec3 }
+  | { type: 'track'; kind: 'treefall' | 'flood' | 'snap'; pos: Vec3; stage?: number };
 
 const rising = (now: boolean, before: boolean) => now && !before;
 

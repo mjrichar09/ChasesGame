@@ -51,6 +51,9 @@ export const VINE_VALLEY: TrackDef = {
     // A last hop onto the start straight.
     { kind: 'kicker', at: 0, offset: 10, length: 7, height: 1.2 },
   ],
+  // TIMBER! A giant tree beside the back section creaks all of lap 1 and
+  // crashes across the road as the leader starts lap 2.
+  events: [{ kind: 'treefall', at: 13, offset: 17, lap: 2, blocked: 1 }],
   pickups: [
     { at: 1, offset: 20, lanes: [-5, -1.7, 1.7, 5] },
     { at: 5, offset: 0, lanes: [-4.5, 0, 4.5] },

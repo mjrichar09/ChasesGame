@@ -178,12 +178,20 @@ export class AiDriver {
     lane -= clamp(here.curvature * 120, -1, 1) * 3; // + curvature = left turn = inside is left (-)
     if (gapAhead) lane = 0;
     lane = this.dodgePeels(lane, pr, track, items);
+    // A fallen tree's crown ahead: take the clear half (if it is seen in time).
+    for (const b of track.brush) {
+      const ahead = track.delta(pr.s, b.s0);
+      if (ahead > -2 && ahead < 45 && this.notices(9000 + Math.floor(b.s0)) < 0.5 + 0.5 * me.itemIQ) lane = -b.side * here.halfWidth * 0.5;
+    }
     // No railing: hold the middle, whatever the line says.
     const openL = track.isOpen(pr.s + 10, -1) || track.isOpen(pr.s, -1);
     const openR = track.isOpen(pr.s + 10, 1) || track.isOpen(pr.s, 1);
     const limit = here.halfWidth - 1.8;
     lane = clamp(lane, openL ? -1 : -limit, openR ? 1 : limit);
-    const careful = openL || openR ? 0.35 : 1;
+    // Water ahead: a good driver lines up straight to skim across it.
+    const fordAhead = track.inWater(pr.s + 18) || track.inWater(pr.s + 6);
+    if (fordAhead && me.level > 0.5) lane = clamp(lane * 0.3, -1.5, 1.5);
+    const careful = openL || openR || (fordAhead && me.level > 0.5) ? 0.35 : 1;
 
     // Pure pursuit.
     const look = 6 + Math.max(0, speed) * 0.45;

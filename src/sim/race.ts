@@ -17,9 +17,10 @@ import { KART, PARROT, RACE, SIM } from '../data/tuning.js';
 import { type DriverInput, NEUTRAL_INPUT } from './input.js';
 import { Items } from './items.js';
 import { BARRIER_GROUPS, GROUND_GROUPS, Kart, yawQuat } from './kart.js';
+import { type EventState, TREE, stepEvents } from './events.js';
 import { lavaFront } from './lava.js';
 import { buildTerrain } from './terrain.js';
-import { type Vec3, add, dot, scale, v3 } from './math.js';
+import { type Vec3, add, cross, dot, normalize, scale, sub, v3 } from './math.js';
 import { Rng } from './rng.js';
 import { Track, type TrackDef } from './track.js';
 
@@ -82,6 +83,14 @@ export class RaceSim {
   clock = 0;
   /** Finishing order, by kart index. */
   readonly finishOrder: number[] = [];
+  /** Mid-race track events and their phases (read by the renderer). */
+  readonly events: EventState[];
+  /** The road collider, rebuilt when a branch snaps. */
+  private roadCollider!: RAPIER.Collider;
+  private ground!: RAPIER.RigidBody;
+  private readonly wallColliders: RAPIER.Collider[] = [];
+  /** Where each kart sits on the grid; held there until GO. */
+  private readonly gridPos: Vec3[] = [];
   /** Kart indices that respawned this step (for effects). */
   respawned: number[] = [];
 
@@ -94,11 +103,13 @@ export class RaceSim {
     this.world.timestep = this.dt;
     this.buildTrack();
     this.items = new Items(this.track, this.rng);
+    this.events = (def.events ?? []).map((d) => ({ def: d, phase: 'idle' as const, t: 0, stage: 0 }));
 
     const count = opts.karts ?? RACE.karts;
     for (let i = 0; i < count; i++) {
       const { pos, yaw } = this.gridSlot(i);
       this.karts.push(new Kart(RAPIER, this.world, i, pos, yawQuat(yaw)));
+      this.gridPos.push(pos);
       const p = this.track.project(pos);
       this.progress.push({
         dist: this.track.closed ? this.track.delta(0, p.s) : p.s - this.track.startS,
@@ -122,11 +133,8 @@ export class RaceSim {
 
   private buildTrack(): void {
     const ground = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
-    const road = this.track.roadMesh();
-    this.world.createCollider(
-      RAPIER.ColliderDesc.trimesh(road.vertices, road.indices).setFriction(0.6).setCollisionGroups(GROUND_GROUPS),
-      ground,
-    );
+    this.ground = ground;
+    this.roadCollider = this.makeRoad();
     // The jungle floor around and under the track.
     this.world.createCollider(
       RAPIER.ColliderDesc.cuboid(600, 0.5, 600)
@@ -148,7 +156,7 @@ export class RaceSim {
       if (desc) this.world.createCollider(desc.setFriction(0.6).setCollisionGroups(GROUND_GROUPS), ground);
     }
     for (const w of this.track.walls) {
-      this.world.createCollider(
+      const c = this.world.createCollider(
         RAPIER.ColliderDesc.cuboid(w.half.x, w.half.y, w.half.z)
           .setTranslation(w.center.x, w.center.y, w.center.z)
           .setRotation(yawQuat(w.yaw))
@@ -159,6 +167,71 @@ export class RaceSim {
           .setCollisionGroups(BARRIER_GROUPS),
         ground,
       );
+      this.wallColliders.push(c);
+    }
+  }
+
+  private makeRoad(): RAPIER.Collider {
+    const road = this.track.roadMesh();
+    return this.world.createCollider(
+      RAPIER.ColliderDesc.trimesh(road.vertices, road.indices).setFriction(0.6).setCollisionGroups(GROUND_GROUPS),
+      this.ground,
+    );
+  }
+
+  /** Laps completed by whoever is furthest round (DNFs excluded). */
+  private get leaderLaps(): number {
+    let best = 0;
+    for (const p of this.progress) if (!p.dnf) best = Math.max(best, Math.floor(p.dist / this.lapLength));
+    return Math.max(0, best);
+  }
+
+  /** Make an event's change to the track real. */
+  private applyEvent(e: EventState): void {
+    const d = e.def;
+    const track = this.track;
+    if (d.kind === 'treefall') {
+      const s = track.anchor(d);
+      const k = track.at(s);
+      // The trunk: a low triangular bump lying diagonally across the road.
+      const a = track.pointAt(s, -d.blocked * (k.halfWidth + 2));
+      const b = track.pointAt(s + TREE.slant, d.blocked * (k.halfWidth + 2));
+      const axis = normalize(sub(b, a));
+      const perp = normalize(cross(axis, v3(0, 1, 0)));
+      const pts: number[] = [];
+      for (const end of [a, b]) {
+        for (const [w, h] of [[-TREE.trunkWidth / 2, -0.2], [TREE.trunkWidth / 2, -0.2], [0, TREE.trunkHeight]] as const) {
+          pts.push(end.x + perp.x * w, end.y + h, end.z + perp.z * w);
+        }
+      }
+      const hull = RAPIER.ColliderDesc.convexHull(new Float32Array(pts));
+      if (hull) this.world.createCollider(hull.setFriction(0.6).setCollisionGroups(GROUND_GROUPS), this.ground);
+      track.brush.push({ s0: s + TREE.crownFrom, s1: s + TREE.crownTo, side: d.blocked });
+      this.items.events.push({ type: 'track', kind: 'treefall', pos: track.pointAt(s + 4, 0) });
+    } else if (d.kind === 'flood') {
+      for (const w of track.waters) {
+        w.s0 = w.base[0] - (d.grow / 2) * e.stage;
+        w.s1 = w.base[1] + (d.grow / 2) * e.stage;
+      }
+      this.items.events.push({ type: 'track', kind: 'flood', pos: track.pointAt(track.waters[0]?.s0 ?? 0, 0), stage: e.stage });
+    } else if (d.kind === 'snap') {
+      const s = track.anchor(d);
+      const gap = { s0: s + d.rampLength, s1: s + d.rampLength + d.length };
+      track.kickers.push({ s0: s, s1: gap.s0, height: d.rampHeight, lateral: 0, halfWidth: track.def.width / 2 });
+      track.gaps.push(gap);
+      for (const smp of track.samples) if (track.inGap(smp.s)) smp.road = false;
+      // New road (with the hole in it), the stub as a ramp, and no barrier over the drop.
+      this.world.removeCollider(this.roadCollider, false);
+      this.roadCollider = this.makeRoad();
+      const hulls = track.kickerHulls();
+      const ramp = RAPIER.ColliderDesc.convexHull(hulls[hulls.length - 1]!);
+      if (ramp) this.world.createCollider(ramp.setFriction(0.6).setCollisionGroups(GROUND_GROUPS), this.ground);
+      track.walls.forEach((w, i) => {
+        if (track.between(w.s, gap.s0 - 2, gap.s1 + 2) || track.between(w.s + 2, gap.s0, gap.s1)) {
+          this.wallColliders[i]?.setEnabled(false);
+        }
+      });
+      this.items.events.push({ type: 'track', kind: 'snap', pos: track.pointAt((gap.s0 + gap.s1) / 2, 0) });
     }
   }
 
@@ -223,15 +296,39 @@ export class RaceSim {
       live && !this.progress[i]!.dnf ? (inputs[i] ?? NEUTRAL_INPUT) : NEUTRAL_INPUT,
     );
 
+    if (live) for (const e of stepEvents(this.events, this.leaderLaps, dt)) this.applyEvent(e);
+    const flood = this.events.find((e) => e.def.kind === 'flood');
+    const stage = flood?.stage ?? 0;
     for (const kart of this.karts) {
       const pr = this.progress[kart.index]!;
       kart.wet = !kart.flying && this.track.inWater(pr.s) && Math.abs(pr.lateral) < this.track.at(pr.s).halfWidth + 4;
+      kart.brush = !kart.flying && kart.grounded > 0 && this.track.inBrush(pr.s, pr.lateral);
+      kart.waterDepth = 1 + 0.45 * stage;
+      if (kart.wet && flood && flood.def.kind === 'flood') {
+        // The creek runs across the road; the flood pushes karts downstream.
+        const r = this.track.at(pr.s).r;
+        kart.current = scale(v3(r.x, 0, r.z), flood.def.current * stage);
+      } else kart.current = v3();
       // The parrot holds its height over the road below (never below take-off).
       if (kart.flying) kart.flyTargetY = Math.max(kart.flyBaseY, this.track.at(pr.s).p.y) + PARROT.altitude;
     }
     this.items.step(dt, this.karts, held, live);
     for (const kart of this.karts) if (!this.progress[kart.index]!.dnf) kart.step(dt, held[kart.index]!);
     this.world.step();
+    // Until GO every kart is held on its grid spot: free to settle on its
+    // springs, but not to roll down a banked or sloping grid (Lava Run's grid
+    // is downhill, and karts used to coast metres before the lights).
+    if (this.phase === 'countdown') {
+      for (const kart of this.karts) {
+        const g = this.gridPos[kart.index]!;
+        const t = kart.body.translation();
+        const v = kart.body.linvel();
+        const w = kart.body.angvel();
+        kart.body.setTranslation({ x: g.x, y: t.y, z: g.z }, true);
+        kart.body.setLinvel({ x: 0, y: v.y, z: 0 }, true);
+        kart.body.setAngvel({ x: w.x, y: 0, z: w.z }, true);
+      }
+    }
     for (const kart of this.karts) if (!this.progress[kart.index]!.dnf) this.track1(kart, held[kart.index]!);
   }
 

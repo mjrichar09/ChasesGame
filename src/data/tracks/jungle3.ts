@@ -51,6 +51,9 @@ export const TREETOP_TANGLE: TrackDef = {
     { kind: 'kicker', at: 11, offset: 8, length: 7, height: 1.2 },
     { kind: 'kicker', at: 0, offset: 18, length: 6, height: 1.1 },
   ],
+  // SNAP! A branch on the opening straight cracks on lap 2 and breaks as the
+  // leader starts lap 3: a new gap, with the broken stub as the ramp.
+  events: [{ kind: 'snap', at: 2, offset: 25, lap: 3, length: 9, rampLength: 9, rampHeight: 1.8 }],
   pickups: [
     { at: 1, offset: 22, lanes: [-3.5, 0, 3.5] },
     { at: 5, offset: -10, lanes: [-3.5, 0, 3.5] },

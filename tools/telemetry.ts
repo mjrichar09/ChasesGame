@@ -34,6 +34,7 @@ for (let i = 0; i < maxSteps && !sim.allFinished; i++) {
     if (Math.abs(k.forwardSpeed) < 5) l.slow += sim.dt;
   }
   for (const e of sim.items.events) {
+    if (e.type === 'track') console.log(`  t=${sim.raceTime.toFixed(1)} TRACK EVENT ${e.kind}${e.stage ? ' stage ' + e.stage : ''}`);
     if (e.type === 'parrot') flights.push({ kart: e.kart, start: sim.progress[e.kart]!.dist, t0: sim.raceTime });
     if (e.type === 'pickup') pickups++; else if (e.type === 'boost') boosts++; else if (e.type === 'peelHit') hits++; else if (e.type === 'whack') whacks++;
   }

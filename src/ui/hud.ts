@@ -36,6 +36,8 @@ export class Hud {
   private lastCount = -1;
   private calloutTimer = 0;
   private lastItem = '';
+  /** The on-screen pause button (the only way to pause on a phone). */
+  onPause: (() => void) | null = null;
 
   constructor(parent: HTMLElement) {
     this.root = document.createElement('div');
@@ -55,6 +57,7 @@ export class Hud {
       <div class="hud-speed"><span>0</span> km/h</div>
       <div class="hud-lava"><span class="lbl">LAVA</span> <b>0</b> m</div>
       <div class="hud-heat"></div>
+      <button class="hud-pause" aria-label="Pause">⏸</button>
       <div class="hud-center"></div>
       <div class="hud-callout"></div>`;
     parent.appendChild(this.root);
@@ -70,6 +73,7 @@ export class Hud {
     this.callout = q('.hud-callout');
     this.map = q('.hud-map') as HTMLCanvasElement;
     this.lava = q('.hud-lava');
+    q('.hud-pause').addEventListener('click', () => this.onPause?.());
     this.heat = q('.hud-heat');
   }
 
@@ -223,6 +227,15 @@ export class Hud {
       c.beginPath();
       c.arc(fx, fy, 5 + Math.sin(performance.now() / 150) * 1.5, 0, Math.PI * 2);
       c.fill();
+    }
+    // A fallen tree across the road.
+    for (const b of sim.track.brush) {
+      const p = sim.track.pointAt((b.s0 + b.s1) / 2, 0);
+      const [x, y] = this.mapPoint(p.x, p.z);
+      c.font = '13px sans-serif';
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      c.fillText('🌳', x, y);
     }
     // The finish, on a point-to-point course.
     if (!sim.track.closed) {

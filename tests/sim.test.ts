@@ -8,7 +8,7 @@ import { autoRace } from '../src/sim/autopilot.js';
 import { type DriverInput, NEUTRAL_INPUT } from '../src/sim/input.js';
 import { Items } from '../src/sim/items.js';
 import { yawQuat } from '../src/sim/kart.js';
-import { add, scale, v3 } from '../src/sim/math.js';
+import { add, dot, scale, sub, v3 } from '../src/sim/math.js';
 import { RaceSim, initPhysics } from '../src/sim/race.js';
 
 beforeAll(async () => {
@@ -185,6 +185,118 @@ describe('snake', () => {
     }
     expect(swings).toBe(ITEMS.snakeSwings);
     expect(me.item).toBe('none');
+  });
+});
+
+describe('the grid', () => {
+  it.each(TRACKS.map((t) => [t.name, t] as const))('%s: nobody moves before GO', (_n, def: TrackDef) => {
+    const sim = new RaceSim(def, { seed: 1 });
+    const start = sim.karts.map((k) => ({ ...k.position }));
+    settle(sim, 120 * 3 - 1, sim.karts.map(() => press({ throttle: 1 })));
+    expect(sim.phase).toBe('countdown');
+    sim.karts.forEach((k, i) => expect(Math.hypot(k.position.x - start[i]!.x, k.position.z - start[i]!.z)).toBeLessThan(0.02));
+    sim.free();
+  });
+});
+
+describe('a jungle that changes', () => {
+  /** Pretend the leader is `laps` laps in, so lap-triggered events fire. */
+  function leaderOn(sim: RaceSim, laps: number): void {
+    sim.progress[1]!.dist = sim.lapLength * laps + 1;
+    sim.progress[1]!.lap = laps;
+    settle(sim, 2);
+  }
+
+  it('Vine Valley: a tree falls across the road on lap 2, and its crown slows you', () => {
+    const sim = racing(2);
+    const tree = sim.events[0]!;
+    expect(tree.phase).toBe('idle');
+    settle(sim, 2);
+    expect(tree.phase).toBe('warning');
+    leaderOn(sim, 1);
+    expect(tree.phase).toBe('active');
+    expect(sim.track.brush).toHaveLength(1);
+    const b = sim.track.brush[0]!;
+    const mid = (b.s0 + b.s1) / 2;
+    // Same speed into the crown and into the clear half: the crown costs more.
+    const through = (lateral: number) => {
+      putAt(sim, 0, mid - 6, lateral);
+      settle(sim, 30);
+      sim.karts[0]!.body.setLinvel(scale(sim.karts[0]!.forward, 15), true);
+      settle(sim, 60, [press({})]);
+      return Math.hypot(sim.karts[0]!.velocity.x, sim.karts[0]!.velocity.z);
+    };
+    expect(through(b.side * 3.5)).toBeLessThan(through(-b.side * 3.5) - 2);
+  });
+
+  it('Canopy Creek: the creek floods wider in two stages', async () => {
+    const { CANOPY_CREEK } = await import('../src/data/tracks/jungle2.js');
+    const sim = new RaceSim(CANOPY_CREEK, { karts: 2, seed: 4 });
+    sim.clock = RACE.countdown;
+    sim.phase = 'racing';
+    const width = () => sim.track.waters[0]!.s1 - sim.track.waters[0]!.s0;
+    const w0 = width();
+    leaderOn(sim, 1);
+    const w1 = width();
+    leaderOn(sim, 2);
+    const w2 = width();
+    expect(w1).toBeGreaterThan(w0 + 10);
+    expect(w2).toBeGreaterThan(w1 + 10);
+  });
+
+  it('a flooded ford: skim it fast and straight, or wade through slowly', async () => {
+    const { CANOPY_CREEK } = await import('../src/data/tracks/jungle2.js');
+    const cross = (speed: number, weave: number, throttle = 1) => {
+      const sim = new RaceSim({ ...CANOPY_CREEK, pickups: [] }, { karts: 2, seed: 2 });
+      sim.clock = RACE.countdown;
+      sim.phase = 'racing';
+      sim.progress[1]!.dist = sim.lapLength * 2 + 1;
+      settle(sim, 3);
+      const w = sim.track.waters[0]!;
+      putAt(sim, 0, w.s0 - 18, 0);
+      settle(sim, 30);
+      const kart = sim.karts[0]!;
+      const k = sim.track.at(w.s0 - 18);
+      kart.body.setLinvel({ x: k.t.x * speed, y: 0, z: k.t.z * speed }, true);
+      for (let i = 0; i < 120 * 4 && sim.progress[0]!.s < w.s1 + 3; i++) {
+        const pr = sim.progress[0]!;
+        const tgt = sim.track.pointAt(pr.s + 8, 0);
+        const rel = sub(tgt, kart.position);
+        const steer = Math.atan2(dot(rel, kart.right), Math.max(dot(rel, kart.forward), 1)) * 2.5 + Math.sin(i / 14) * weave;
+        sim.step([press({ throttle, steer: Math.max(-1, Math.min(1, steer)) }), press({})]);
+      }
+      const out = kart.forwardSpeed;
+      sim.free();
+      return out;
+    };
+    const skim = cross(27, 0);
+    expect(skim).toBeGreaterThan(20);
+    expect(skim).toBeGreaterThan(cross(27, 1) + 10);
+    // Lifting off into the water: below skimming speed, it wades.
+    expect(skim).toBeGreaterThan(cross(15, 0, 0.3) + 10);
+  });
+
+  it('Treetop Tangle: the branch snaps on lap 3 — a real hole, and a ramp before it', async () => {
+    const { TREETOP_TANGLE } = await import('../src/data/tracks/jungle3.js');
+    const sim = new RaceSim(TREETOP_TANGLE, { karts: 2, seed: 4 });
+    sim.clock = RACE.countdown;
+    sim.phase = 'racing';
+    const snap = sim.track.snapRanges()[0]!;
+    const mid = (snap.s0 + snap.s1) / 2;
+    expect(sim.track.inGap(mid)).toBe(false);
+    leaderOn(sim, 1);
+    expect(sim.events[0]!.phase).toBe('warning');
+    leaderOn(sim, 2);
+    expect(sim.events[0]!.phase).toBe('active');
+    expect(sim.track.inGap(mid)).toBe(true);
+    expect(sim.track.kickerHeight(snap.ramp[1] - 0.5, 0)).toBeGreaterThan(1);
+    // Parked over the hole, a kart drops through it.
+    const k = sim.track.at(mid);
+    sim.karts[0]!.place({ x: k.p.x, y: k.p.y + 1, z: k.p.z }, yawQuat(Math.atan2(k.t.x, k.t.z)));
+    sim.progress[0]!.s = mid;
+    const y0 = sim.karts[0]!.position.y;
+    settle(sim, 120);
+    expect(sim.karts[0]!.position.y).toBeLessThan(y0 - 2);
   });
 });
 

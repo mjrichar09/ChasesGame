@@ -12,6 +12,7 @@
  * most of what makes a twisty kart track feel fast rather than fiddly.
  */
 
+import type { TrackEventDef } from './events.js';
 import { type Vec3, add, clamp, cross, dot, length, normalize, scale, sub, v3 } from './math.js';
 
 export interface TrackPoint {
@@ -94,6 +95,8 @@ export interface TrackDef {
   open?: { startOffset: number; finishOffset: number };
   /** Lava chases the field down an open track (see sim/lava.ts). */
   lava?: { startBehind: number; delay: number; speed0: number; speedMax: number; accel: number };
+  /** Things that happen to the track mid-race (see sim/events.ts). */
+  events?: TrackEventDef[];
   /** Ground shaped by a height function (a mountainside), not a flat floor. */
   terrain?: { height: (x: number, z: number) => number; margin: number; spacing: number };
 }
@@ -131,9 +134,13 @@ export interface Water {
   s0: number;
   s1: number;
   skew: number;
+  /** The width it was built with; floods grow `s0`/`s1` from it. */
+  base: [number, number];
 }
 
 export interface Wall {
+  /** Where along the road this barrier segment starts. */
+  s: number;
   /** Centre, half extents and yaw of a cuboid along the road edge. */
   center: Vec3;
   half: Vec3;
@@ -179,6 +186,8 @@ export class Track {
   readonly opens: { s0: number; s1: number; side: -1 | 0 | 1 }[] = [];
   readonly walls: Wall[] = [];
   readonly pickups: Pickup[] = [];
+  /** Stretches of half-road choked by a fallen tree's crown (set mid-race). */
+  readonly brush: { s0: number; s1: number; side: -1 | 1 }[] = [];
   /** `s` of each control point, before the start offset is applied. */
   private readonly pointS: number[];
   /** A loop (laps) or point to point. */
@@ -204,7 +213,7 @@ export class Track {
         continue;
       }
       if (f.kind === 'stream') {
-        this.waters.push({ s0: s - f.width / 2, s1: s + f.width / 2, skew: f.skew ?? 0 });
+        this.waters.push({ s0: s - f.width / 2, s1: s + f.width / 2, skew: f.skew ?? 0, base: [s - f.width / 2, s + f.width / 2] });
       } else if (f.kind === 'kicker') {
         const hw = (f.width ?? def.width) / 2;
         this.kickers.push({ s0: s, s1: s + f.length, height: f.height, lateral: f.lateral ?? 0, halfWidth: hw });
@@ -286,6 +295,22 @@ export class Track {
   isOpen(s: number, side: -1 | 1): boolean {
     const w = this.wrap(s);
     return this.opens.some((o) => (o.side === 0 || o.side === side) && this.between(w, o.s0, o.s1));
+  }
+
+  /** True where (s, lateral) is inside a fallen tree's crown. */
+  inBrush(s: number, lateral: number): boolean {
+    return this.brush.some((b) => this.between(this.wrap(s), b.s0, b.s1) && lateral * b.side > -1);
+  }
+
+  /** Stretches that will snap mid-race: the renderer draws them as separate pieces. */
+  snapRanges(): { s0: number; s1: number; ramp: [number, number] }[] {
+    return (this.def.events ?? [])
+      .filter((e) => e.kind === 'snap')
+      .map((e) => {
+        const s = this.anchor(e as TrackAnchor);
+        const f = e as { rampLength: number; length: number };
+        return { s0: s + f.rampLength, s1: s + f.rampLength + f.length, ramp: [s, s + f.rampLength] as [number, number] };
+      });
   }
 
   inWater(s: number): boolean {
@@ -385,6 +410,7 @@ export class Track {
           const d = sub(b, a);
           const len = Math.hypot(d.x, d.z);
           this.walls.push({
+            s,
             center: add(mid, v3(0, WALL_SOLID_HEIGHT / 2 - 0.15, 0)),
             // A little overlap so there are no seams to snag on.
             half: v3(WALL_THICK / 2, WALL_SOLID_HEIGHT / 2 + 0.15, len / 2 + Math.min(0.3, seg * 0.1)),

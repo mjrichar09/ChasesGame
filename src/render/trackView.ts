@@ -11,15 +11,20 @@
 import * as THREE from 'three';
 import type { TrackLook } from '../data/tracks/looks.js';
 import { Rng } from '../sim/rng.js';
+import type { EventState } from '../sim/events.js';
+import { TREE } from '../sim/events.js';
 import { buildTerrain, terrainHeight } from '../sim/terrain.js';
 import { type VolcanoView, buildVolcanoView } from './volcanoView.js';
-import { BRANCH_N, type Track, WALL_HEIGHT, WALL_SOLID_HEIGHT, WALL_THICK, branchProfile } from '../sim/track.js';
+import { BRANCH_N, type Track, WALL_HEIGHT, WALL_SOLID_HEIGHT, WALL_THICK, type Water, branchProfile } from '../sim/track.js';
 import { GEO, PartBuilder, toon } from './toon.js';
 
 export interface TrackView {
   group: THREE.Group;
-  /** Animated each frame (water, lava). `lavaFront` is −∞ without lava. */
-  update(time: number, lavaFront: number): void;
+  /**
+   * Animated each frame (water, lava, mid-race events). `lavaFront` is −∞
+   * without lava; `events` and `waters` are the live sim's, during a race.
+   */
+  update(time: number, lavaFront: number, events?: readonly EventState[], waters?: readonly Water[]): void;
   /** The crater, on volcano tracks (for eruption effects). */
   crater?: THREE.Vector3;
 }
@@ -141,13 +146,23 @@ export function buildTrackView(track: Track, look: TrackLook): TrackView {
     const h = terrainHeight(terrain, x, z);
     return Number.isNaN(h) ? -0.5 : h;
   };
-  group.add(look.barrier === 'vines' ? vineRails(track) : walls(track));
+  const barriers = look.barrier === 'vines' ? vineRails(track) : walls(track);
+  group.add(barriers);
   for (const k of kickerMeshes(track)) group.add(k);
   if (look.branches) group.add(branchesAndTrees(track));
+  // Mid-race events: each builds its own pieces and animates from the sim's state.
+  const eventViews = (track.def.events ?? []).map((def, i) => {
+    if (def.kind === 'treefall') return fallingTree(track, def);
+    if (def.kind === 'snap') return snappingBranch(track, i, barriers);
+    return null;
+  });
+  for (const v of eventViews) if (v) group.add(v.group);
   const water = look.riverUnderGaps ? river(track) : [];
   if (look.gapLava) for (const f of fissures(track)) group.add(f);
-  if (look.stream) water.push(stream(look.stream));
-  for (const w of fords(track)) water.push(w);
+  const creek = look.stream ? stream(look.stream) : null;
+  if (creek) water.push(creek.mesh);
+  const fordViews = fords(track);
+  for (const f of fordViews) water.push(f.mesh);
   for (const w of water) group.add(w);
   group.add(startArch(track, track.startS, track.def.name.toUpperCase()));
   if (!track.closed) group.add(startArch(track, track.finishS, 'SAFE ZONE', heightAt));
@@ -158,12 +173,24 @@ export function buildTrackView(track: Track, look: TrackLook): TrackView {
   return {
     group,
     crater: volcano?.crater,
-    update(time: number, lavaFront: number) {
+    update(time: number, lavaFront: number, events?: readonly EventState[], waters?: readonly Water[]) {
       for (const w of water) {
         const mat = w.material as THREE.MeshToonMaterial;
         if (mat.map) mat.map.offset.set(time * 0.05, time * 0.2);
       }
       volcano?.update(lavaFront, time);
+      eventViews.forEach((v, i) => v?.update(events?.[i] ?? null, time));
+      // Floods: fords follow the sim's widths; the creek swells and rises with them.
+      const live = waters ?? track.waters.map((w) => ({ ...w, s0: w.base[0], s1: w.base[1] }));
+      fordViews.forEach((f, i) => {
+        const w = live[i];
+        if (w) f.set(w.s0, w.s1);
+      });
+      if (creek) {
+        const w = live[0];
+        const grow = w ? (w.s1 - w.s0) / (w.base[1] - w.base[0]) : 1;
+        creek.swell(grow);
+      }
     },
   };
 }
@@ -581,7 +608,7 @@ function waterTexture(): THREE.CanvasTexture {
  * muddy banks, just above the jungle floor. Where it crosses the road (which
  * dips to the same level there) the water runs over the road surface.
  */
-function stream(path: { x: number; z: number }[]): THREE.Mesh {
+function stream(path: { x: number; z: number }[]): { mesh: THREE.Mesh; swell(grow: number): void } {
   const curve = new THREE.CatmullRomCurve3(path.map((p) => new THREE.Vector3(p.x, 0, p.z)));
   const n = 220;
   const pts = curve.getSpacedPoints(n);
@@ -648,7 +675,18 @@ function stream(path: { x: number; z: number }[]): THREE.Mesh {
     stones.setMatrixAt(i, m);
   }
   water.add(stones);
-  return water;
+  let swollen = 1;
+  return {
+    mesh: water,
+    swell(grow: number) {
+      // Ease toward the flood's width; a little higher as it widens.
+      const next = swollen + (grow - swollen) * 0.04;
+      if (Math.abs(next - swollen) < 0.003) return;
+      swollen = next;
+      water.geometry.dispose();
+      water.geometry = ribbon(WATER_Y + (swollen - 1) * 0.12, Math.min(2.4, 1 + (swollen - 1) * 0.7));
+    },
+  };
 }
 
 /**
@@ -657,15 +695,15 @@ function stream(path: { x: number; z: number }[]): THREE.Mesh {
  * would look dry while still dragging at the kart. This sheet follows the
  * road surface exactly over the wet stretch, overlapping the creek either side.
  */
-function fords(track: Track): THREE.Mesh[] {
-  return track.waters.map((w) => {
+function fords(track: Track): { mesh: THREE.Mesh; set(s0: number, s1: number): void }[] {
+  const geometry = (s0: number, s1: number) => {
     const pos: number[] = [];
     const uv: number[] = [];
     const idx: number[] = [];
-    const span = track.wrap(w.s1 - w.s0);
+    const span = track.wrap(s1 - s0);
     const steps = Math.ceil(span);
     for (let i = 0; i <= steps; i++) {
-      const s = w.s0 + (span * i) / steps;
+      const s = s0 + (span * i) / steps;
       const k = track.at(s);
       const hw = k.halfWidth + WALL_THICK + 1.5;
       for (const side of [-1, 1]) {
@@ -680,8 +718,11 @@ function fords(track: Track): THREE.Mesh[] {
     geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
     geo.setIndex(idx);
     geo.computeVertexNormals();
+    return geo;
+  };
+  return track.waters.map((w) => {
     const mesh = new THREE.Mesh(
-      geo,
+      geometry(w.s0, w.s1),
       new THREE.MeshToonMaterial({
         map: waterTexture(),
         gradientMap: toon(0).gradientMap,
@@ -692,7 +733,19 @@ function fords(track: Track): THREE.Mesh[] {
       }),
     );
     mesh.renderOrder = 2;
-    return mesh;
+    let built = [w.s0, w.s1];
+    return {
+      mesh,
+      set(s0: number, s1: number) {
+        // The sim's water jumps a stage; ease the drawn water up to it.
+        const t0 = built[0]! + (s0 - built[0]!) * 0.04;
+        const t1 = built[1]! + (s1 - built[1]!) * 0.04;
+        if (Math.abs(t0 - built[0]!) + Math.abs(t1 - built[1]!) < 0.02) return;
+        built = [t0, t1];
+        mesh.geometry.dispose();
+        mesh.geometry = geometry(t0, t1);
+      },
+    };
   });
 }
 
@@ -934,13 +987,16 @@ function branchesAndTrees(track: Track): THREE.Group {
 /** Unbroken runs of road as [firstSample, count] (a closed loop is one run). */
 function roadRuns(track: Track): [number, number][] {
   const n = track.samples.length;
-  const startAt = track.samples.findIndex((smp, i) => smp.road && !track.samples[(i - 1 + n) % n]!.road);
+  // Pieces that will snap off are their own meshes, so the main runs skip them.
+  const cuts = track.snapRanges();
+  const road = (i: number) => track.samples[i]!.road && !cuts.some((c) => track.between(i, c.s0, c.s1));
+  const startAt = track.samples.findIndex((_, i) => road(i) && !road((i - 1 + n) % n));
   if (startAt < 0) return [[0, n + 1]];
   const runs: [number, number][] = [];
   let first = -1;
   for (let k = 0; k <= n; k++) {
     const i = (startAt + k) % n;
-    const on = track.samples[i]!.road && k < n;
+    const on = road(i) && k < n;
     if (on && first < 0) first = k;
     if (!on && first >= 0) {
       runs.push([(startAt + first) % n, k - first]);
@@ -990,10 +1046,12 @@ function branchMesh(track: Track, [first, count]: [number, number], bark: THREE.
   (mesh.material as THREE.Material).side = THREE.DoubleSide;
   mesh.castShadow = true;
   mesh.receiveShadow = true;
-  // Rounded ends: a squashed sphere the size of the cross-section.
+  // Rounded ends where the branch meets a real gap (not where a piece is cut out to snap later).
   if (count < n) {
     for (const k of [0, count - 1]) {
       const smp = track.samples[(first + k) % n]!;
+      const beyond = track.samples[(first + (k === 0 ? -1 : count) + n) % n]!;
+      if (beyond.road) continue;
       const { a, b } = branchProfile(smp.halfWidth);
       const cap = new THREE.Mesh(GEO.sphere, bark);
       cap.scale.set(a, b, a * 0.5);
@@ -1108,6 +1166,175 @@ function fissures(track: Track): THREE.Mesh[] {
     mesh.add(glow);
     return mesh;
   });
+}
+
+/**
+ * TIMBER! A giant tree by the road: creaks and sways while the event is a
+ * warning, crashes across the road when it goes active, leaving its trunk
+ * lying where the sim's bump is and its crown heaped over the blocked half.
+ */
+function fallingTree(track: Track, def: Extract<NonNullable<Track['def']['events']>[number], { kind: 'treefall' }>) {
+  const g = new THREE.Group();
+  const s = track.anchor(def);
+  const k = track.at(s);
+  const a = track.pointAt(s, -def.blocked * (k.halfWidth + 2));
+  const b = track.pointAt(s + TREE.slant, def.blocked * (k.halfWidth + 2));
+  // Pivot just above the road, so the fallen trunk lies on it where the sim's bump is.
+  const base = new THREE.Vector3(a.x, a.y + 0.25, a.z).addScaledVector(
+    new THREE.Vector3(b.x - a.x, 0, b.z - a.z).normalize(),
+    -2.5,
+  );
+  const lie = new THREE.Vector3(b.x - a.x, b.y - a.y, b.z - a.z).normalize();
+  const fall = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), lie);
+
+  // The tree: trunk up +Y from the pivot, crown at the top.
+  const tree = new THREE.Group();
+  tree.position.copy(base);
+  g.add(tree);
+  const bd = new PartBuilder();
+  const LEN = 26;
+  bd.add(tree, GEO.cylinder, toon(0x5b4330), { pos: [0, LEN / 2, 0], scale: [0.85, LEN, 0.85] });
+  for (let i = 0; i < 4; i++) {
+    const ang = (i / 4) * Math.PI * 2;
+    bd.add(tree, GEO.box, toon(0x4e3927), { pos: [Math.cos(ang) * 0.9, 0.8, Math.sin(ang) * 0.9], rot: [0, -ang, 0.35], scale: [1.3, 1.8, 0.25] });
+  }
+  for (const [x, y, z, r] of [[0, LEN, 0, 4.2], [2.6, LEN - 2.5, 1, 3.2], [-2.4, LEN - 2, -1, 3.4], [0.5, LEN + 2.4, -1.5, 3]] as const)
+    bd.add(tree, GEO.sphereLo, toon(y > LEN ? 0x4ea83c : 0x2f7d2a), { pos: [x, y, z], scale: [r, r * 0.8, r] });
+  bd.build();
+
+  // What the crown leaves on the road: branches and leaves over the blocked half.
+  const debris = new THREE.Group();
+  g.add(debris);
+  const dd = new PartBuilder();
+  const rng = new Rng(123);
+  for (let d = TREE.crownFrom; d < TREE.crownTo; d += 1.6) {
+    for (let j = 0; j < 2; j++) {
+      const lat = def.blocked * rng.range(-0.5, k.halfWidth + 1);
+      const p = track.pointAt(s + d + rng.range(-0.6, 0.6), lat);
+      const sc = rng.range(1.0, 1.9);
+      dd.add(debris, GEO.sphereLo, toon(rng.next() < 0.5 ? 0x2f7d2a : 0x4ea83c), { pos: [p.x, p.y + sc * 0.35, p.z], scale: [sc * 1.2, sc * 0.6, sc] });
+      if (rng.next() < 0.4) dd.add(debris, GEO.cylinder, toon(0x6e4c2e), { pos: [p.x, p.y + 0.3, p.z], rot: [Math.PI / 2, rng.range(0, 3), 0.3], scale: [0.18, rng.range(2, 4), 0.18] });
+    }
+  }
+  dd.build();
+  debris.visible = false;
+
+  return {
+    group: g,
+    update(e: EventState | null, time: number) {
+      if (!e || e.phase === 'idle') {
+        tree.quaternion.identity();
+        debris.visible = false;
+        return;
+      }
+      if (e.phase === 'warning') {
+        // Creaking: an uneasy sway that grows.
+        const sway = Math.sin(time * 1.6) * 0.012 + Math.sin(time * 4.3) * 0.006 * Math.min(1, e.t / 30);
+        tree.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), sway);
+        debris.visible = false;
+        return;
+      }
+      // Falling: accelerating over about a second and a quarter, then a little bounce.
+      const t = e.t;
+      const f = Math.min(1, 0.65 * t * t);
+      const bounce = f >= 1 ? Math.max(0, Math.sin((t - 1.24) * 9) * Math.exp(-(t - 1.24) * 4) * 0.04) : 0;
+      tree.quaternion.slerpQuaternions(new THREE.Quaternion(), fall, f - bounce);
+      debris.visible = f >= 1;
+    },
+  };
+}
+
+/**
+ * SNAP! The stretch of branch that breaks mid-race, drawn as its own piece:
+ * cracks open across it during the warning (and it sags), then it falls away.
+ * The broken stub — a bark ramp — appears, and the barrier over the drop goes.
+ */
+function snappingBranch(track: Track, index: number, barriers: THREE.Object3D) {
+  const g = new THREE.Group();
+  const range = track.snapRanges()[0]!;
+  const def = track.def.events![index] as { rampHeight: number };
+  const n = track.samples.length;
+  const i0 = Math.ceil(range.s0);
+  const count = Math.max(2, Math.floor(range.s1) - i0 + 2);
+  const bark = new THREE.MeshToonMaterial({ map: barkTexture(), gradientMap: toon(0).gradientMap });
+  (bark.map as THREE.Texture).repeat.set(3, 1);
+  const piece = branchMesh(track, [i0 % n, count], bark);
+  // Cracks: dark jagged slashes across the top, revealed during the warning.
+  const cracks = new THREE.Group();
+  const cb = new PartBuilder();
+  for (const f of [0.15, 0.55, 0.9]) {
+    const s = range.s0 + (range.s1 - range.s0) * f;
+    const smp = track.at(s);
+    for (let j = -2; j <= 2; j++) {
+      const p = track.pointAt(s + (j % 2) * 0.4, j * smp.halfWidth * 0.32);
+      cb.add(cracks, GEO.box, toon(0x1a1009), { pos: [p.x, p.y + 0.04, p.z], rot: [0, Math.atan2(smp.t.x, smp.t.z) + j * 0.5, 0], scale: [0.12, 0.06, 2.2] });
+    }
+  }
+  cb.build(false);
+  cracks.visible = false;
+  piece.add(cracks);
+  g.add(piece);
+  // The stub ramp: a bark wedge that tips up where the branch broke.
+  const ramp = new THREE.Group();
+  const rb = new PartBuilder();
+  const [r0, r1] = range.ramp;
+  for (let s = r0; s < r1; s += 1) {
+    const smp = track.at(s);
+    const h = (def.rampHeight * (s - r0)) / (r1 - r0);
+    const p = track.pointAt(s + 0.5, 0);
+    rb.add(ramp, GEO.box, toon(0x7a5532), {
+      pos: [p.x, p.y + h / 2 + 0.05, p.z],
+      rot: [0, Math.atan2(smp.t.x, smp.t.z), 0],
+      scale: [smp.halfWidth * 2, h + 0.1, 1.02],
+    });
+  }
+  rb.build();
+  ramp.visible = false;
+  g.add(ramp);
+  const mid = track.at((range.s0 + range.s1) / 2);
+  const hideBarriers = () => {
+    for (const inst of barriers.children) {
+      if (!(inst instanceof THREE.InstancedMesh)) continue;
+      const per = inst.count / track.walls.length;
+      track.walls.forEach((w, wi) => {
+        if (track.between(w.s, range.s0 - 2, range.s1 + 2) || track.between(w.s + 2, range.s0, range.s1)) {
+          for (let k = 0; k < per; k++) inst.setMatrixAt(wi * per + k, new THREE.Matrix4().makeScale(0, 0, 0));
+        }
+      });
+      inst.instanceMatrix.needsUpdate = true;
+    }
+  };
+  let broken = false;
+  return {
+    group: g,
+    update(e: EventState | null, time: number) {
+      const phase = e?.phase ?? 'idle';
+      cracks.visible = phase === 'warning';
+      if (phase === 'idle') {
+        piece.position.set(0, 0, 0);
+        piece.rotation.set(0, 0, 0);
+        piece.visible = true;
+        ramp.visible = false;
+        return;
+      }
+      if (phase === 'warning') {
+        // Sagging, with a nervous shiver.
+        piece.position.set(0, -0.12 - Math.sin(time * 9) * 0.015, 0);
+        return;
+      }
+      if (!broken) {
+        broken = true;
+        hideBarriers();
+      }
+      ramp.visible = true;
+      // Falling away: drop and tumble, gone after a few seconds.
+      const t = e!.t;
+      piece.position.set(0, -0.5 * 16 * t * t, 0);
+      piece.visible = t < 3;
+      piece.rotation.set(0, 0, 0);
+      piece.rotateOnWorldAxis(new THREE.Vector3(mid.t.x, 0, mid.t.z).normalize(), t * 0.6);
+    },
+  };
 }
 
 function proto(draw: (b: PartBuilder, node: THREE.Object3D) => void): Map<THREE.Material, THREE.BufferGeometry> {

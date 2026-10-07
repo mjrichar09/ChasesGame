@@ -50,6 +50,8 @@ const DEV_LAPS = Number(params.get('laps')) || undefined;
 const AUTOPILOT = params.has('autopilot');
 /** `?give=parrot` (or banana/snake): hand the player that item at GO, for testing. */
 const GIVE = params.get('give') as 'banana' | 'snake' | 'parrot' | null;
+/** `?eventlap=1`: mid-race track events fire on that lap instead (testing). */
+const EVENT_LAP = Number(params.get('eventlap')) || 0;
 
 export class Game {
   private readonly stage: Stage;
@@ -79,7 +81,10 @@ export class Game {
   private wasAir: boolean[] = [];
   private wasWet: boolean[] = [];
   private flapTimer = 0;
+  private wasSkim = false;
   private eruptTimer = 0;
+  /** Event warnings already shown this race. */
+  private warned2 = new Set<string>();
   private warned = false;
   private lastLap = 0;
   private playerFinishedAt: number | null = null;
@@ -113,6 +118,20 @@ export class Game {
     this.controls.onPause = () => this.togglePause();
     this.hud = new Hud(overlay);
     this.hud.show(false);
+    this.hud.onPause = () => this.togglePause();
+    // Leaving the page (another tab, another app, screen locked) silences
+    // everything and pauses a race in progress; it waits on the pause menu.
+    const away = () => {
+      this.sound.setAway(true);
+      if (this.state === 'race') this.togglePause();
+    };
+    const back = () => {
+      if (document.visibilityState === 'visible' && document.hasFocus()) this.sound.setAway(false);
+    };
+    document.addEventListener('visibilitychange', () => (document.visibilityState === 'hidden' ? away() : back()));
+    window.addEventListener('blur', away);
+    window.addEventListener('focus', back);
+    window.addEventListener('pagehide', away);
     this.menu = new Menu(overlay);
     this.menu.onGesture = () => this.sound.unlock();
     this.menu.onPreview = (i) => this.showPreview(i);
@@ -138,6 +157,8 @@ export class Game {
     window.addEventListener('resize', () => this.resize());
     this.resize();
     this.menu.title();
+    // Dev builds only: a handle for headless checks (teleporting to a spot, etc).
+    if (import.meta.env.DEV) (window as unknown as { __game: Game }).__game = this;
     this.showPreview(0);
     requestAnimationFrame((t) => this.frame(t));
   }
@@ -219,7 +240,9 @@ export class Game {
   private startRace(): void {
     this.endRace();
     this.seed = (this.seed * 7919 + 13) % 100000;
-    const sim = new RaceSim(TRACKS[this.trackIndex]!, { seed: this.seed, laps: DEV_LAPS });
+    const base = TRACKS[this.trackIndex]!;
+    const def = EVENT_LAP && base.events ? { ...base, events: base.events.map((e) => ({ ...e, lap: EVENT_LAP })) } : base;
+    const sim = new RaceSim(def, { seed: this.seed, laps: DEV_LAPS });
     this.sim = sim;
     this.player = PLAYER_SLOT;
 
@@ -246,6 +269,7 @@ export class Game {
     this.itemsView = new ItemsView(sim.items);
     this.raceGroup.add(this.itemsView.group);
     this.wasAir = sim.karts.map(() => false);
+    this.warned2.clear();
     this.wasWet = sim.karts.map(() => false);
     this.lastLap = 0;
     this.playerFinishedAt = null;
@@ -389,6 +413,10 @@ export class Game {
   private handleEvents(sim: RaceSim): void {
     const v = (p: { x: number; y: number; z: number }) => new THREE.Vector3(p.x, p.y, p.z);
     for (const e of sim.items.events) {
+      if (e.type === 'track') {
+        this.trackEvent(e.kind, e.pos, e.stage ?? 1);
+        continue;
+      }
       const vol = e.kart === this.player ? 1 : this.nearPlayer(e.pos);
       switch (e.type) {
         case 'pickup':
@@ -476,6 +504,38 @@ export class Game {
     });
   }
 
+  /** The jungle changes: callout, sound, shake, and a burst at the spot. */
+  private trackEvent(kind: 'treefall' | 'flood' | 'snap', pos: { x: number; y: number; z: number }, stage: number): void {
+    const near = this.nearPlayer(pos);
+    const at = new THREE.Vector3(pos.x, pos.y + 1, pos.z);
+    if (kind === 'treefall') {
+      this.hud.shout('TIMBER!', 'bad', 1.6);
+      this.sound.play('land', Math.max(0.35, near));
+      this.cam.kick(0.2 + near * 0.6);
+      this.fx.emit({ pos: at, count: 40, color: [0x4ea83c, 0x2f7d2a, 0x8a6440], speed: [3, 9], size: [0.5, 1.2], life: [0.8, 1.6], gravity: 5 });
+    } else if (kind === 'flood') {
+      this.hud.shout(stage > 1 ? 'THE CREEK IS STILL RISING!' : 'FLASH FLOOD!', 'bad', 1.8);
+      this.sound.play('splash', Math.max(0.4, near));
+    } else {
+      this.hud.shout('SNAP! THE BRANCH BROKE!', 'bad', 1.8);
+      this.sound.play('land', Math.max(0.4, near));
+      this.sound.play('whack', Math.max(0.3, near));
+      this.cam.kick(0.2 + near * 0.6);
+      this.fx.emit({ pos: at, count: 36, color: [0x8a6440, 0x6e4c2e, 0x5e8f3a], speed: [3, 8], size: [0.4, 0.9], life: [0.8, 1.6], gravity: 9 });
+    }
+  }
+
+  /** Heads-up a lap before something happens to the track. */
+  private eventWarnings(sim: RaceSim): void {
+    sim.events.forEach((e, i) => {
+      const key = `${i}:${e.phase}`;
+      if (e.phase !== 'warning' || this.warned2.has(key)) return;
+      this.warned2.add(key);
+      if (e.def.kind === 'snap') this.hud.shout('CREEEAK… THAT BRANCH WON’T HOLD', 'bad', 2);
+      if (e.def.kind === 'treefall' && sim.raceTime > 5) this.hud.shout('CREEEAK…', 'bad', 1.4);
+    });
+  }
+
   /** The crater: lava bombs arcing out now and then. */
   private erupt(dt: number, crater: THREE.Vector3): void {
     this.eruptTimer -= dt;
@@ -525,6 +585,16 @@ export class Game {
         const back = new THREE.Vector3(0, 0.2, -1).applyQuaternion(view.rot);
         this.fx.emit({ pos: ex, count: 3, color: [0xffe14d, 0xff8a1f, 0xff4d1f], speed: [3, 7], dir: back, spread: 0.25, size: [0.35, 0.7], life: [0.15, 0.35], drag: 4 });
       }
+      // Skimming across the top: a big fan of spray behind, and a callout.
+      if (k.skimming) {
+        const back = new THREE.Vector3(0, -0.7, -1.4).applyQuaternion(view.rot).add(view.pos);
+        for (const side of [-1, 1]) {
+          const out = new THREE.Vector3(side * 0.9, 0.9, -1).applyQuaternion(view.rot);
+          this.fx.emit({ pos: back, count: 3, color: [0xffffff, 0xd8f4ff], speed: [6, 10], dir: out, spread: 0.3, size: [0.4, 0.8], life: [0.4, 0.8], gravity: 12 });
+        }
+        if (i === this.player && !this.wasSkim) this.hud.shout('SKIMMING!', 'good', 0.9);
+      }
+      if (i === this.player) this.wasSkim = k.skimming;
       // Fording the stream: spray off every wheel, and a splash on the way in.
       if (k.wet) {
         if (!this.wasWet[i]) {
@@ -556,7 +626,9 @@ export class Game {
     this.last = now;
     this.time += dt;
     const venue = this.venues[this.trackIndex];
-    venue?.view.update(this.time, this.sim && this.state !== 'menu' ? this.sim.lavaS : -Infinity);
+    const live = this.sim && this.state !== 'menu' ? this.sim : null;
+    venue?.view.update(this.time, live ? live.lavaS : -Infinity, live?.events, live?.track.waters);
+    if (live && this.state === 'race') this.eventWarnings(live);
     if (venue?.view.crater && this.state !== 'paused') this.erupt(dt, venue.view.crater);
 
     const sim = this.sim;

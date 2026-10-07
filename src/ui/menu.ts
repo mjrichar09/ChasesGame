@@ -155,7 +155,7 @@ export class Menu {
         <button class="big resume">RESUME</button>
         <button class="restart">Restart race</button>
         <button class="mute">${muted ? 'Sound: off' : 'Sound: on'}</button>
-        <button class="quit">Quit to gorilla select</button>
+        <button class="quit">Quit race</button>
       </div>`;
     this.root.querySelector('.resume')!.addEventListener('click', () => this.onResume?.());
     this.root.querySelector('.restart')!.addEventListener('click', () => this.onRestart?.());

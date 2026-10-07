@@ -36,10 +36,25 @@ export class Sound {
   private birdTimer = 2;
   muted = false;
 
+  /** True while the page is hidden or unfocused: everything is silent. */
+  private away = false;
+
+  /**
+   * The page went to the background (another tab, another app, the phone
+   * locked) or came back. All sound stops while away — the whole audio
+   * context is suspended, so nothing keeps playing behind the player's back.
+   */
+  setAway(away: boolean): void {
+    this.away = away;
+    if (!this.ctx) return;
+    if (away) void this.ctx.suspend();
+    else void this.ctx.resume();
+  }
+
   /** Call from a user gesture. Safe to call repeatedly. */
   unlock(): void {
     if (this.ctx) {
-      if (this.ctx.state === 'suspended') void this.ctx.resume();
+      if (this.ctx.state === 'suspended' && !this.away) void this.ctx.resume();
       return;
     }
     const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;

@@ -82,6 +82,21 @@ export const WATER = {
   /** Fraction of speed lost per second while wheels are in the water. */
   drag: 1.1,
   grip: 0.78,
+  /**
+   * Skimming: hit the water fast and straight and the kart planes across the
+   * top. Above `skimSpeed` (m/s) while turning slower than `skimYaw` (rad/s)
+   * it starts; it holds down to `skimHold` / `skimYawHold` (a little slack, so
+   * it does not flicker), and keeps only `skimDrag` of the drag and
+   * `skimCurrent` of a flood's push. "Straight" is about how fast the kart is
+   * turning, not the wheel angle: small line corrections keep you up,
+   * weaving or a hard turn drops you in. The skilful way through a flood.
+   */
+  skimSpeed: 22,
+  skimHold: 18.5,
+  skimYaw: 0.3,
+  skimYawHold: 0.5,
+  skimDrag: 0.12,
+  skimCurrent: 0.25,
 } as const;
 
 export const ITEMS = {

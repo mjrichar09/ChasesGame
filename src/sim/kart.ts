@@ -14,6 +14,7 @@
 
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { ITEMS, KART, PARROT, SIM, WATER } from '../data/tuning.js';
+import { TREE } from './events.js';
 import type { DriverInput } from './input.js';
 import { NEUTRAL_INPUT } from './input.js';
 import {
@@ -111,6 +112,14 @@ export class Kart {
   out = false;
   /** Set by the race each step while the kart is fording a stream. */
   wet = false;
+  /** How deep the water is (floods make it more): multiplies the drag. */
+  waterDepth = 1;
+  /** Downstream push while wet, m/s² (a flooded creek's current). */
+  current: Vec3 = v3();
+  /** Ploughing through a fallen tree's crown. */
+  brush = false;
+  /** Planing across the water's surface (fast and straight). */
+  skimming = false;
   /** Engine and top-speed multiplier: AI skill and rubber-banding. 1 for players. */
   power = 1;
   private wasAirborne = false;
@@ -359,7 +368,7 @@ export class Kart {
 
       const load = Math.max(c.load, staticLoad * 0.35);
       const grip =
-        KART.gripMu * load * (w.front ? 1 : KART.rearGrip) * (spinning ? 0.25 : 1) * (this.wet ? WATER.grip : 1);
+        KART.gripMu * load * (w.front ? 1 : KART.rearGrip) * (spinning ? 0.25 : 1) * (this.wet && !this.skimming ? WATER.grip : 1) * (this.brush ? TREE.grip : 1);
       // A tyre that has broken away grips less than one that hasn't: past the
       // limit the force falls toward `slideGrip`. That is what makes a corner
       // taken too fast run wide into the logs instead of scrubbing off speed
@@ -390,8 +399,21 @@ export class Kart {
     }
 
     // Wading: the stream pulls speed off in proportion to it.
+    // Water: wade (full drag and current) or skim across the top.
     if (this.wet && grounded > 0) {
-      body.applyImpulse(scale(v3(vel.x, 0, vel.z), -mass * WATER.drag * dt), true);
+      const turning = Math.abs(angvel.y);
+      this.skimming = this.skimming
+        ? speed > WATER.skimHold && turning < WATER.skimYawHold
+        : speed > WATER.skimSpeed && turning < WATER.skimYaw;
+      const drag = WATER.drag * this.waterDepth * (this.skimming ? WATER.skimDrag : 1);
+      body.applyImpulse(scale(v3(vel.x, 0, vel.z), -mass * drag * dt), true);
+      body.applyImpulse(scale(this.current, mass * dt * (this.skimming ? WATER.skimCurrent : 1)), true);
+    } else if (!this.wet) {
+      this.skimming = false;
+    }
+    // Leaves and branches: slow going.
+    if (this.brush && grounded > 0) {
+      body.applyImpulse(scale(v3(vel.x, 0, vel.z), -mass * TREE.drag * dt), true);
     }
 
     // Air drag.
