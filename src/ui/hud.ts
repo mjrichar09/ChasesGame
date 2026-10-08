@@ -8,6 +8,7 @@
 
 import type { Gorilla } from '../data/gorillas.js';
 import type { RaceSim } from '../sim/race.js';
+import { MOVE_NAMES } from '../sim/swagger.js';
 
 const ORDINAL = ['th', 'st', 'nd', 'rd'];
 export const ordinal = (n: number): string => {
@@ -25,17 +26,23 @@ export class Hud {
   private readonly item: HTMLElement;
   private readonly pips: HTMLElement;
   private readonly flight: HTMLElement;
+  private readonly swag: HTMLElement;
+  private swagShown = '';
   private readonly speed: HTMLElement;
   private readonly center: HTMLElement;
   private readonly callout: HTMLElement;
   private readonly map: HTMLCanvasElement;
   private readonly lava: HTMLElement;
   private readonly heat: HTMLElement;
+  private readonly lines: HTMLElement;
+  private linesOn = 0;
   private mapPath: Path2D | null = null;
   private mapXf = { x0: 0, z0: 0, k: 1 };
   private lastCount = -1;
   private calloutTimer = 0;
   private lastItem = '';
+  /** Touch controls are showing (changes the swagger hint). */
+  touchMode = false;
   /** The on-screen pause button (the only way to pause on a phone). */
   onPause: (() => void) | null = null;
 
@@ -53,10 +60,13 @@ export class Hud {
         <div class="hud-pips"></div>
         <div class="hud-flight"><i></i></div>
       </div>
+      <div class="hud-swagger"><div class="ring"><b>★</b></div><span class="name"></span></div>
       <canvas class="hud-map" width="180" height="180"></canvas>
       <div class="hud-speed"><span>0</span> km/h</div>
       <div class="hud-lava"><span class="lbl">LAVA</span> <b>0</b> m</div>
       <div class="hud-heat"></div>
+      <div class="hud-speedlines"></div>
+      <div class="hud-vignette"></div>
       <button class="hud-pause" aria-label="Pause">⏸</button>
       <div class="hud-center"></div>
       <div class="hud-callout"></div>`;
@@ -68,6 +78,7 @@ export class Hud {
     this.item = q('.hud-item');
     this.pips = q('.hud-pips');
     this.flight = q('.hud-flight');
+    this.swag = q('.hud-swagger');
     this.speed = q('.hud-speed span');
     this.center = q('.hud-center');
     this.callout = q('.hud-callout');
@@ -75,6 +86,7 @@ export class Hud {
     this.lava = q('.hud-lava');
     q('.hud-pause').addEventListener('click', () => this.onPause?.());
     this.heat = q('.hud-heat');
+    this.lines = q('.hud-speedlines');
   }
 
   show(on: boolean): void {
@@ -156,6 +168,24 @@ export class Hud {
         kart.item === 'banana' ? '🍌' : kart.item === 'snake' ? '🐍' : kart.item === 'parrot' ? '🦜' : '';
       this.pips.innerHTML = '<i></i>'.repeat(kart.item === 'none' ? 0 : kart.charges);
       if (kart.item !== 'none') this.item.classList.remove('pop'), void this.item.offsetWidth, this.item.classList.add('pop');
+    }
+
+    // Speed lines at the edges when boosting or flat out.
+    const fast = kart.boosting || kart.noBrakesTime > 0 ? 1 : Math.max(0, (kart.forwardSpeed - 30) / 8);
+    this.linesOn += (Math.min(1, fast) - this.linesOn) * Math.min(1, dt * 8);
+    this.lines.style.opacity = String(this.linesOn * 0.85);
+
+    // Swagger meter: a ring filling gold; full shows the move's name and how to fire it.
+    this.swag.style.display = sim.swaggerOn ? '' : 'none';
+    if (sim.swaggerOn) {
+      const full = kart.swagger >= 100;
+      const key = `${Math.floor(kart.swagger)}/${full}/${kart.move}`;
+      if (key !== this.swagShown) {
+        this.swagShown = key;
+        this.swag.style.setProperty('--fill', `${kart.swagger}%`);
+        this.swag.classList.toggle('full', full);
+        this.swag.querySelector('.name')!.textContent = full ? `${MOVE_NAMES[kart.move]} · ${this.touchMode ? 'HOLD ★' : 'HOLD F'}` : '';
+      }
     }
 
     // Flight time left, as a draining bar under the item slot.

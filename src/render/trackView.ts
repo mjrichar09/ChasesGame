@@ -15,6 +15,7 @@ import type { EventState } from '../sim/events.js';
 import { TREE } from '../sim/events.js';
 import { buildTerrain, terrainHeight } from '../sim/terrain.js';
 import { type VolcanoView, buildVolcanoView } from './volcanoView.js';
+import { type Sky, roadsideTufts, skyDressing } from './polish.js';
 import { BRANCH_N, type Track, WALL_HEIGHT, WALL_SOLID_HEIGHT, WALL_THICK, type Water, branchProfile } from '../sim/track.js';
 import { GEO, PartBuilder, toon } from './toon.js';
 
@@ -27,6 +28,8 @@ export interface TrackView {
   update(time: number, lavaFront: number, events?: readonly EventState[], waters?: readonly Water[]): void;
   /** The crater, on volcano tracks (for eruption effects). */
   crater?: THREE.Vector3;
+  /** Clouds and sun, to keep centred on the camera. */
+  sky?: Sky;
 }
 
 function canvasTexture(w: number, h: number, draw: (c: CanvasRenderingContext2D) => void): THREE.CanvasTexture {
@@ -169,10 +172,14 @@ export function buildTrackView(track: Track, look: TrackLook): TrackView {
   if (look.vineArches) group.add(vineArches(track));
   if (look.canopy) group.add(canopy(track));
   if (look.scenery > 0) group.add(scenery(track, look.scenery, heightAt));
+  if (look.tufts) group.add(roadsideTufts(track));
+  const sky = look.clouds !== undefined ? skyDressing(look.clouds, look.sunGlow ?? 0xffffff, new THREE.Vector3(60, 90, 30)) : undefined;
+  if (sky) group.add(sky.group);
 
   return {
     group,
     crater: volcano?.crater,
+    sky,
     update(time: number, lavaFront: number, events?: readonly EventState[], waters?: readonly Water[]) {
       for (const w of water) {
         const mat = w.material as THREE.MeshToonMaterial;

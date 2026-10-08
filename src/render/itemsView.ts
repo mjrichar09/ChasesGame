@@ -143,6 +143,8 @@ export class ItemsView {
   private readonly pickups: PickupView[] = [];
   private readonly peels = new Map<number, THREE.Group>();
   private readonly peelProto = peelMesh();
+  private readonly loose = new Map<number, THREE.Group>();
+  private readonly bunchProto = bananaBunch();
 
   constructor(items: Items) {
     items.pickups.forEach((p, i) => {
@@ -176,6 +178,25 @@ export class ItemsView {
       const pulse = 1 + Math.sin(time * 4 + v.phase) * 0.08;
       for (const r of [v.ring, v.ringSnake, v.ringParrot]) r.scale.setScalar(pulse);
     });
+
+    // Loose bunches (Feed the Troop): bob and spin until someone grabs them.
+    const liveLoose = new Set<number>();
+    for (const l of items.loose) {
+      liveLoose.add(l.id);
+      let m = this.loose.get(l.id);
+      if (!m) {
+        m = this.bunchProto.clone();
+        this.group.add(m);
+        this.loose.set(l.id, m);
+      }
+      m.position.set(l.pos.x, l.pos.y + Math.sin(time * 3 + l.id) * 0.15, l.pos.z);
+      m.rotation.y = time * 2 + l.id;
+    }
+    for (const [id, m] of this.loose) {
+      if (liveLoose.has(id)) continue;
+      this.group.remove(m);
+      this.loose.delete(id);
+    }
 
     // Peels: add new, drop gone.
     const live = new Set<number>();

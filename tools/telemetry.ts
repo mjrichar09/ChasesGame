@@ -18,6 +18,8 @@ const where: Record<string, number> = {};
 // Where each kart's time goes: spun out, wobbling (whacked/bonked), wading, crawling.
 const lost = sim.karts.map(() => ({ spin: 0, wobble: 0, wet: 0, slow: 0 }));
 // Parrot flights: lap distance gained over the flight's 6 s (+ landing), per flight.
+const moves: Record<number, number> = {};
+const moveKinds: Record<string, number> = {};
 const flights: { kart: number; start: number; t0: number; done?: number }[] = [];
 for (let i = 0; i < maxSteps && !sim.allFinished; i++) {
   race.step();
@@ -34,6 +36,7 @@ for (let i = 0; i < maxSteps && !sim.allFinished; i++) {
     if (Math.abs(k.forwardSpeed) < 5) l.slow += sim.dt;
   }
   for (const e of sim.items.events) {
+    if (e.type === 'swagger' && e.phase === 'hit') { moves[e.kart] = (moves[e.kart] ?? 0) + 1; moveKinds[e.move] = (moveKinds[e.move] ?? 0) + 1; }
     if (e.type === 'track') console.log(`  t=${sim.raceTime.toFixed(1)} TRACK EVENT ${e.kind}${e.stage ? ' stage ' + e.stage : ''}`);
     if (e.type === 'parrot') flights.push({ kart: e.kart, start: sim.progress[e.kart]!.dist, t0: sim.raceTime });
     if (e.type === 'pickup') pickups++; else if (e.type === 'boost') boosts++; else if (e.type === 'peelHit') hits++; else if (e.type === 'whack') whacks++;
@@ -54,3 +57,5 @@ console.log(`pickups ${pickups} boosts ${boosts} peel hits ${hits} whacks ${whac
 console.log('respawns by s', where);
 const gains = flights.filter((f) => f.done !== undefined).map((f) => f.done!);
 console.log(`parrot flights ${flights.length}  lap metres gained in 7 s: ${gains.map((g) => g.toFixed(0)).join(' ')}  (driving covers ~${(7 * 24).toFixed(0)})`);
+console.log('swagger moves per kart:', sim.karts.map((k) => `#${k.index}(lvl ${race.drivers[k.index]!.me.level.toFixed(1)}):${moves[k.index] ?? 0}`).join(' '));
+console.log('by move:', JSON.stringify(moveKinds));

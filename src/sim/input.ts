@@ -24,6 +24,8 @@ export interface DriverInput {
   /** Held: swing the snake to the left / right. */
   whackLeft: boolean;
   whackRight: boolean;
+  /** Held: fire the swagger move (needs a full meter and a short hold). */
+  swagger: boolean;
 }
 
 export const NEUTRAL_INPUT: DriverInput = {
@@ -33,4 +35,5 @@ export const NEUTRAL_INPUT: DriverInput = {
   item: false,
   whackLeft: false,
   whackRight: false,
+  swagger: false,
 };

@@ -22,7 +22,7 @@ export function autoRace(def: TrackDef, opts: RaceOptions = {}): AutoRace {
     drivers,
     step() {
       const inputs = sim.karts.map((k) =>
-        drivers[k.index]!.drive(sim.dt, k, sim.progress[k.index]!, sim.track, sim.karts, sim.items, null),
+        drivers[k.index]!.drive(sim.dt, k, sim.progress[k.index]!, sim.track, sim.karts, sim.items, null, sim),
       );
       sim.step(inputs);
       return inputs;

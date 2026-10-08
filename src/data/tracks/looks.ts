@@ -40,6 +40,11 @@ export interface TrackLook {
   branches: boolean;
   /** Glowing lava down in the road gaps (a fissure) instead of water. */
   gapLava?: boolean;
+  /** Cloud tint and sun glow colour, for open skies (omit under a canopy). */
+  clouds?: number;
+  sunGlow?: number;
+  /** Grass tufts along the road's edges. */
+  tufts?: boolean;
 }
 
 export const LOOKS: Record<string, TrackLook> = {
@@ -63,6 +68,9 @@ export const LOOKS: Record<string, TrackLook> = {
     barrier: 'logs',
     riverUnderGaps: true,
     branches: false,
+    clouds: 0xffffff,
+    sunGlow: 0xfff0b0,
+    tufts: true,
   },
   'canopy-creek': {
     blurb: 'Deep under the canopy. Tight turns, a creek to ford.',
@@ -85,6 +93,7 @@ export const LOOKS: Record<string, TrackLook> = {
     barrier: 'logs',
     riverUnderGaps: true,
     branches: false,
+    tufts: true,
   },
   'treetop-tangle': {
     blurb: 'Thirty metres up, along the branches. Mind the drop.',
@@ -106,6 +115,8 @@ export const LOOKS: Record<string, TrackLook> = {
     barrier: 'vines',
     riverUnderGaps: false,
     branches: true,
+    clouds: 0xffffff,
+    sunGlow: 0xfff0b0,
   },
   'lava-run': {
     blurb: 'The volcano is erupting. Get down the mountain before the lava does.',
@@ -128,5 +139,8 @@ export const LOOKS: Record<string, TrackLook> = {
     riverUnderGaps: false,
     branches: false,
     gapLava: true,
+    clouds: 0x6a4a44,
+    sunGlow: 0xff7a30,
+    tufts: true,
   },
 };

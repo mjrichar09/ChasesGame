@@ -33,6 +33,7 @@ npm run dev        # http://localhost:5174
 | Steer | A D / ← → | left stick | drag on the left half |
 | Banana (or snake) | Space | A | 🍌 button |
 | Whack left / right | Q / E | LB / RB | 🐍 buttons |
+| Swagger move (hold) | F | X | ★ button |
 | Look back | C (hold) | Y | — |
 | Pause / quit | Esc | Start | ⏸ button |
 
@@ -43,6 +44,24 @@ npm run dev        # http://localhost:5174
 - **Parrot** (blue ring): a giant macaw carries you for 6 s. Steer and set the pace;
   fly over peels and snakes, or cut straight across the infield to a later part of the lap.
 - One item at a time — a full hand drives straight through pickups.
+
+**Swagger.** Drive with style — big air, clean landings, near misses, overtakes,
+drafting, late braking, landing hits — to fill the swagger meter (bonks, spins and
+respawns drain it). Full? Hold **F** (pad X, or the gold ★ on touch) for your
+gorilla's signature move:
+
+| Gorilla | Move |
+|---|---|
+| Big Boris | **Roar** — karts nearby wobble and drop their bananas |
+| Koko Loco | **No Brakes** — boost with grip to spare and no wall penalty |
+| Professor Tumbles | **Slow Clap** — karts just ahead lose 30% pace |
+| Mama Mango | **Feed the Troop** — leaves bananas on the road, refills her hands |
+| Tiny Tank | **Pogo** — a huge bounce over gaps, peels and rivals |
+| DJ Banana | **Drop the Beat** — rivals' steering swaps for 1.5 s |
+| Smooth Steve | **Too Cool** — 3 s immune to everything, lava included |
+| Granite Gus | **Boulder** — a heavy rolling rock that shoves karts aside |
+
+Swagger can be switched off on the select screen for pure racing.
 
 Every gorilla has their own celebration: on the select screen, on the
 finish podium for the top three, and in the seat when their snake or peel

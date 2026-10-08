@@ -35,6 +35,7 @@ export class TouchControls implements InputSource {
       <div class="touch-buttons">
         <button data-b="whackLeft" class="tb tb-whack tb-wl">🐍◀</button>
         <button data-b="item" class="tb tb-item">🍌</button>
+        <button data-b="swagger" class="tb tb-swagger">★</button>
         <button data-b="whackRight" class="tb tb-whack tb-wr">▶🐍</button>
         <button data-b="brake" class="tb tb-brake">BRAKE</button>
         <button data-b="gas" class="tb tb-gas">GAS</button>
@@ -112,6 +113,11 @@ export class TouchControls implements InputSource {
     return matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
   }
 
+  /** The ★ button only shows when the swagger meter is full. */
+  setSwaggerReady(ready: boolean): void {
+    this.root.querySelector<HTMLElement>('.tb-swagger')!.classList.toggle('ready', ready);
+  }
+
   show(on: boolean): void {
     this.active = on;
     this.root.style.display = on ? '' : 'none';
@@ -127,6 +133,7 @@ export class TouchControls implements InputSource {
       item: b('item'),
       whackLeft: b('whackLeft'),
       whackRight: b('whackRight'),
+      swagger: b('swagger'),
     };
   }
 }

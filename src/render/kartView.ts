@@ -15,6 +15,7 @@ import { ITEMS, KART, PARROT } from '../data/tuning.js';
 import type { Kart } from '../sim/kart.js';
 import { celebrate } from './celebrate.js';
 import { type ParrotRig, animateParrot, buildParrot } from './parrot.js';
+import { contactShadow, outline, rimLight } from './polish.js';
 import { type KartRig, buildKart } from './kartModel.js';
 import { GEO, PartBuilder, toon } from './toon.js';
 
@@ -44,19 +45,56 @@ export class KartView {
   /** Built the first time this kart flies. */
   private parrot: ParrotRig | null = null;
   private parrotT = 0;
+  /** Swagger visuals: a star when the meter is full, auras while a move lasts. */
+  private swag: {
+    star: THREE.Sprite;
+    mark: THREE.Sprite;
+    markKind: string;
+    cool: THREE.Mesh;
+    fire: THREE.Mesh;
+    rock: THREE.Mesh;
+  } | null = null;
+  /** Seconds the gorilla has been doing its show-off. */
+  private lastShowOff = 0;
   /** Seconds since the lava took this kart (−1 while racing). */
   private toastT = -1;
   /** Rendered pose this frame, for the camera and effects. */
   readonly pos = new THREE.Vector3();
   readonly rot = new THREE.Quaternion();
 
-  constructor(gorilla: Gorilla) {
+  /** A soft blob on the ground under the kart (positioned by the session). */
+  readonly shadow: THREE.Mesh;
+  private readonly ink: boolean;
+
+  constructor(gorilla: Gorilla, opts: { ink?: boolean } = {}) {
     this.gorilla = gorilla;
     this.rig = buildKart(gorilla);
     this.snake = buildSnake();
     this.snake.visible = false;
     this.rig.gorilla.hands[1].add(this.snake);
     this.seatY = this.rig.gorilla.root.position.y;
+    // Cartoon pop: a warm rim light, and ink outlines where the device can afford them.
+    this.ink = opts.ink ?? false;
+    rimLight(this.rig.root);
+    if (this.ink) outline(this.rig.root);
+    this.shadow = contactShadow();
+  }
+
+  /**
+   * Lay the contact shadow on the ground at `ground` (a point on the surface
+   * under the kart, with that surface's normal). It shrinks and fades as the
+   * kart rises.
+   */
+  placeShadow(ground: THREE.Vector3, normal: THREE.Vector3): void {
+    const height = Math.max(0, this.pos.y - ground.y - 0.9);
+    const f = Math.max(0, 1 - height / 8);
+    this.shadow.visible = f > 0.02 && this.rig.root.visible;
+    this.shadow.position.copy(ground).addScaledVector(normal, 0.06);
+    const yaw = new THREE.Euler().setFromQuaternion(this.rot, 'YXZ').y;
+    this.shadow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+    this.shadow.rotateZ(-yaw);
+    this.shadow.scale.setScalar(0.6 + f * 0.4);
+    (this.shadow.material as THREE.MeshBasicMaterial).opacity = f;
   }
 
   /** Start this gorilla's celebration: seated (mid-race) or standing (podiums). */
@@ -74,6 +112,60 @@ export class KartView {
     return this.celebLeft > 0;
   }
 
+  /** Swagger: the full-meter star, the wind-up bounce, and each move's look while it lasts. */
+  private animateSwagger(kart: Kart, dt: number): void {
+    const any = kart.swagger >= 100 || kart.coolTime > 0 || kart.boulderTime > 0 || kart.noBrakesTime > 0 ||
+      kart.slowTime > 0 || kart.steerSwapTime > 0 || kart.moveWindup > 0;
+    // Showing off after a hit: a quick seated celebration.
+    if (kart.showOff > this.lastShowOff + 0.5) this.celebrate(1.4, true);
+    this.lastShowOff = kart.showOff;
+    if (!any && !this.swag) return;
+    if (!this.swag) {
+      const additive = (color: number) =>
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false });
+      const star = new THREE.Sprite(new THREE.SpriteMaterial({ map: emojiTexture('★', '#ffcc33'), depthTest: false }));
+      star.scale.setScalar(1.1);
+      star.position.set(0, 3.1, 0);
+      const mark = new THREE.Sprite(new THREE.SpriteMaterial({ map: emojiTexture('👏'), depthTest: false }));
+      mark.scale.setScalar(1.3);
+      mark.position.set(0, 3.4, 0);
+      const cool = new THREE.Mesh(new THREE.SphereGeometry(2.1, 20, 14), additive(0xffd84a));
+      const fire = new THREE.Mesh(new THREE.SphereGeometry(1.9, 16, 12), additive(0xff4a1a));
+      const rock = new THREE.Mesh(
+        new THREE.IcosahedronGeometry(1.9, 1),
+        new THREE.MeshToonMaterial({ color: 0x7d776c, gradientMap: toon(0).gradientMap }),
+      );
+      for (const o of [star, mark, cool, fire, rock]) {
+        o.visible = false;
+        this.rig.root.add(o);
+      }
+      this.swag = { star, mark, markKind: '👏', cool, fire, rock };
+    }
+    const s = this.swag;
+    const t = kart.moveT;
+    s.star.visible = kart.swagger >= 100;
+    if (s.star.visible) s.star.material.rotation = Math.sin(t * 3) * 0.3;
+    // Wind-up: the kart puffs up for a beat.
+    const puff = kart.moveWindup > 0 ? 1 + Math.sin((0.35 - kart.moveWindup) * 18) * 0.08 : 1;
+    this.rig.body.scale.setScalar(puff);
+    s.cool.visible = kart.coolTime > 0;
+    if (s.cool.visible) s.cool.scale.setScalar(1 + Math.sin(t * 8) * 0.05);
+    s.fire.visible = kart.noBrakesTime > 0;
+    if (s.fire.visible) s.fire.scale.set(1, 0.8 + Math.sin(t * 20) * 0.1, 1.3);
+    s.rock.visible = kart.boulderTime > 0;
+    if (s.rock.visible) s.rock.rotation.x -= Math.max(0, kart.forwardSpeed) * dt * 0.55;
+    this.rig.gorilla.root.visible = !s.rock.visible;
+    // Over a victim's head: clapped, or the music that scrambled their steering.
+    const kind = kart.steerSwapTime > 0 ? '🎵' : kart.slowTime > 0 ? '👏' : '';
+    s.mark.visible = kind !== '';
+    if (kind && kind !== s.markKind) {
+      s.markKind = kind;
+      s.mark.material.map = emojiTexture(kind);
+      s.mark.material.needsUpdate = true;
+    }
+    if (s.mark.visible) s.mark.position.y = 3.4 + Math.sin(t * 6) * 0.15;
+  }
+
   /**
    * The parrot swoops down at take-off, hauls the kart along on two vines,
    * flaps harder as it tires, and after letting go climbs away and is gone.
@@ -86,6 +178,8 @@ export class KartView {
     }
     if (!this.parrot) {
       this.parrot = buildParrot();
+      rimLight(this.parrot.root);
+      if (this.ink) outline(this.parrot.root);
       this.rig.root.add(this.parrot.root);
     }
     const p = this.parrot;
@@ -268,6 +362,7 @@ export class KartView {
       g.head.rotation.z = Math.sin(kart.wobbleTime * 30) * 0.35;
     }
     this.animateParrot(kart, dt);
+    this.animateSwagger(kart, dt);
 
     // A spin-out or a wobble interrupts any celebrating.
     if (kart.spinning || kart.wobbleTime > 0) this.celebLeft = 0;
@@ -300,4 +395,27 @@ export function buildSnake(): THREE.Group {
   b.add(g, GEO.box, toon(0xd8343a), { pos: [0, -1.1, 0.2], scale: [0.015, 0.01, 0.12] });
   b.build();
   return g;
+}
+
+const emojiCache = new Map<string, THREE.CanvasTexture>();
+/** A big emoji (or symbol) on a transparent texture, for floating markers. */
+export function emojiTexture(text: string, color = '#ffffff'): THREE.CanvasTexture {
+  const key = text + color;
+  const hit = emojiCache.get(key);
+  if (hit) return hit;
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d')!;
+  g.font = '96px "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.lineWidth = 10;
+  g.strokeStyle = '#2a1a0e';
+  g.strokeText(text, 64, 70);
+  g.fillStyle = color;
+  g.fillText(text, 64, 70);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  emojiCache.set(key, tex);
+  return tex;
 }

@@ -26,7 +26,8 @@ import type { DriverInput } from './input.js';
 import type { Items } from './items.js';
 import type { Kart } from './kart.js';
 import { clamp, dot, lerp, sub } from './math.js';
-import type { Progress } from './race.js';
+import type { Progress, RaceSim } from './race.js';
+import { goodMoment } from './swagger.js';
 import { Rng } from './rng.js';
 import type { Track } from './track.js';
 
@@ -113,6 +114,8 @@ export class AiDriver {
   private overcook = 0;
   /** Seconds a whack target has been alongside (reaction time). */
   private sighted = 0;
+  /** Seconds the swagger meter has been full. */
+  private fullFor = 0;
 
   constructor(me: Personality) {
     this.me = me;
@@ -134,6 +137,7 @@ export class AiDriver {
     karts: readonly Kart[],
     items: Items,
     leaderPlayerDist: number | null,
+    sim?: RaceSim,
   ): DriverInput {
     const me = this.me;
     const pos = kart.position;
@@ -236,7 +240,7 @@ export class AiDriver {
     }
 
     const use = this.items(dt, kart, maxK, gapAhead, karts, items, pr, track);
-    return { throttle, brake, steer, ...use };
+    return { throttle, brake, steer, ...use, swagger: this.swagger(dt, kart, sim) };
   }
 
   /**
@@ -254,7 +258,23 @@ export class AiDriver {
     const x = dot(rel, kart.right);
     const z = dot(rel, kart.forward);
     const steer = clamp(Math.atan2(x, Math.max(z, 0.1)) * 1.6, -1, 1);
-    return { throttle: 1, brake: 0, steer, item: false, whackLeft: false, whackRight: false };
+    return { throttle: 1, brake: 0, steer, item: false, whackLeft: false, whackRight: false, swagger: false };
+  }
+
+  /**
+   * Swagger: rookies fire the moment the meter is full; better drivers wait
+   * for the right moment for their move — or until they have sat on a full
+   * meter too long. The button is held (the sim wants a short hold).
+   */
+  private swagger(dt: number, kart: Kart, sim?: RaceSim): boolean {
+    if (!sim || kart.swagger < 100) {
+      this.fullFor = 0;
+      return false;
+    }
+    this.fullFor += dt;
+    if (kart.swaggerHold > 0) return true;
+    if (this.me.itemIQ < 0.35) return true;
+    return goodMoment(sim, kart) || this.fullFor > 6 + this.me.itemIQ * 6;
   }
 
   /** Shift the lane away from any peel lying near it in the next stretch. */

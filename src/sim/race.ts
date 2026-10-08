@@ -19,6 +19,7 @@ import { Items } from './items.js';
 import { BARRIER_GROUPS, GROUND_GROUPS, Kart, yawQuat } from './kart.js';
 import { type EventState, TREE, stepEvents } from './events.js';
 import { lavaFront } from './lava.js';
+import { MOVES, type Move, type SwaggerTrack, newSwaggerTrack, shoves, stepSwagger } from './swagger.js';
 import { buildTerrain } from './terrain.js';
 import { type Vec3, add, cross, dot, normalize, scale, sub, v3 } from './math.js';
 import { Rng } from './rng.js';
@@ -66,6 +67,10 @@ export interface RaceOptions {
   seed?: number;
   karts?: number;
   laps?: number;
+  /** Swagger meters and moves (default on). */
+  swagger?: boolean;
+  /** Each kart's signature move, by kart index (default: the roster's, in order). */
+  moves?: Move[];
 }
 
 export class RaceSim {
@@ -83,6 +88,10 @@ export class RaceSim {
   clock = 0;
   /** Finishing order, by kart index. */
   readonly finishOrder: number[] = [];
+  /** Swagger is on for this race. */
+  readonly swaggerOn: boolean;
+  /** Per-kart swagger bookkeeping. */
+  readonly swaggerTrack: SwaggerTrack[] = [];
   /** Mid-race track events and their phases (read by the renderer). */
   readonly events: EventState[];
   /** The road collider, rebuilt when a branch snaps. */
@@ -104,13 +113,17 @@ export class RaceSim {
     this.buildTrack();
     this.items = new Items(this.track, this.rng);
     this.events = (def.events ?? []).map((d) => ({ def: d, phase: 'idle' as const, t: 0, stage: 0 }));
+    this.swaggerOn = opts.swagger ?? true;
 
     const count = opts.karts ?? RACE.karts;
     for (let i = 0; i < count; i++) {
       const { pos, yaw } = this.gridSlot(i);
-      this.karts.push(new Kart(RAPIER, this.world, i, pos, yawQuat(yaw)));
+      const kart = new Kart(RAPIER, this.world, i, pos, yawQuat(yaw));
+      kart.move = opts.moves?.[i] ?? MOVES[i % MOVES.length]!;
+      this.karts.push(kart);
       this.gridPos.push(pos);
       const p = this.track.project(pos);
+      this.swaggerTrack.push(newSwaggerTrack(count, i + 1));
       this.progress.push({
         dist: this.track.closed ? this.track.delta(0, p.s) : p.s - this.track.startS,
         s: p.s,
@@ -312,6 +325,7 @@ export class RaceSim {
       // The parrot holds its height over the road below (never below take-off).
       if (kart.flying) kart.flyTargetY = Math.max(kart.flyBaseY, this.track.at(pr.s).p.y) + PARROT.altitude;
     }
+    const eventsFrom = this.items.events.length;
     this.items.step(dt, this.karts, held, live);
     for (const kart of this.karts) if (!this.progress[kart.index]!.dnf) kart.step(dt, held[kart.index]!);
     this.world.step();
@@ -330,6 +344,10 @@ export class RaceSim {
       }
     }
     for (const kart of this.karts) if (!this.progress[kart.index]!.dnf) this.track1(kart, held[kart.index]!);
+    if (live) {
+      stepSwagger(this, held, eventsFrom);
+      shoves(this);
+    }
   }
 
   /** Lap progress, finishing, and respawns for one kart. */
@@ -416,7 +434,7 @@ export class RaceSim {
   private bonk(kart: Kart, pr: Progress, sample: ReturnType<Track['at']>, lateral: number): void {
     pr.bonkCooldown = Math.max(0, pr.bonkCooldown - this.dt);
     // Only a kart on its wheels can bonk — not one flying or jumping over the logs.
-    if (pr.bonkCooldown > 0 || !sample.road || this.track.inWater(pr.s) || kart.grounded === 0) return;
+    if (pr.bonkCooldown > 0 || !sample.road || this.track.inWater(pr.s) || kart.grounded === 0 || kart.immune || kart.noBrakesTime > 0) return;
     const side = Math.sign(lateral);
     if (Math.abs(lateral) < sample.halfWidth - KART.half.x - 0.35) return;
     const v = kart.velocity;
@@ -463,6 +481,7 @@ export class RaceSim {
 
   /** The lava takes a kart: it stops where it is, out of the race. */
   private toast(kart: Kart): void {
+    if (kart.coolTime > 0) return; // Too cool for lava.
     const pr = this.progress[kart.index]!;
     pr.dnf = true;
     kart.out = true;

@@ -10,6 +10,7 @@ import { Items } from '../src/sim/items.js';
 import { yawQuat } from '../src/sim/kart.js';
 import { add, dot, scale, sub, v3 } from '../src/sim/math.js';
 import { RaceSim, initPhysics } from '../src/sim/race.js';
+import { SWAGGER, type Move } from '../src/sim/swagger.js';
 
 beforeAll(async () => {
   await initPhysics();
@@ -32,6 +33,7 @@ function putAt(sim: RaceSim, i: number, s: number, lateral: number): void {
   const pr = sim.progress[i]!;
   pr.s = sim.track.wrap(s);
   pr.safeS = pr.s;
+  pr.dist = sim.track.closed ? sim.track.delta(0, pr.s) : pr.s - sim.track.startS;
 }
 
 function settle(sim: RaceSim, steps = 60, inputs: DriverInput[] = []): void {
@@ -185,6 +187,123 @@ describe('snake', () => {
     }
     expect(swings).toBe(ITEMS.snakeSwings);
     expect(me.item).toBe('none');
+  });
+});
+
+describe('swagger', () => {
+  /** Two karts side by side on a straight, kart 0 with a full meter and move `m`. */
+  function ready(m: Move, opts: { swagger?: boolean } = {}): RaceSim {
+    const sim = new RaceSim(VINE_VALLEY, { karts: 3, seed: 7, moves: [m, 'roar', 'roar'], ...opts });
+    sim.clock = RACE.countdown;
+    sim.phase = 'racing';
+    putAt(sim, 0, 140, -2);
+    putAt(sim, 1, 150, 2);
+    putAt(sim, 2, 600, 0);
+    settle(sim, 30);
+    sim.karts[0]!.swagger = SWAGGER.max;
+    return sim;
+  }
+  /** Hold the swagger button through the hold and the wind-up. */
+  const fire = (sim: RaceSim) => {
+    for (let i = 0; i < Math.ceil((SWAGGER.hold + SWAGGER.windup) * 120) + 4; i++) sim.step([press({ swagger: true }), press({}), press({})]);
+  };
+
+  it('airtime fills the meter; bonks, spins and respawns empty it', () => {
+    const sim = ready('roar');
+    const k = sim.karts[0]!;
+    k.swagger = 0;
+    k.body.setLinvel({ x: 0, y: 14, z: 0 }, true);
+    settle(sim, 60);
+    expect(k.swagger).toBeGreaterThan(3);
+    // Drive into someone else's peel: the slip costs swagger.
+    putAt(sim, 0, 200, 0);
+    settle(sim, 20);
+    k.swagger = 50;
+    const ahead = add(add(k.position, scale(k.forward, 6)), v3(0, -0.4, 0));
+    sim.items.peels.push({ id: 77, pos: ahead, yaw: 0, owner: 1, age: 5 });
+    for (let i = 0; i < 240 && !k.spinning; i++) sim.step([press({ throttle: 1 }), press({}), press({})]);
+    expect(k.spinning).toBe(true);
+    expect(k.swagger).toBeLessThan(45);
+  });
+
+  it('needs a held button and a full meter, then spends it all', () => {
+    const sim = ready('pogo');
+    const k = sim.karts[0]!;
+    sim.step([press({ swagger: true }), press({}), press({})]);
+    sim.step([press({}), press({}), press({})]); // a tap is not enough
+    expect(k.swagger).toBe(SWAGGER.max);
+    fire(sim);
+    expect(k.swagger).toBeLessThan(5); // spent (it may already be earning airtime off the pogo)
+    k.swagger = 20;
+    fire(sim);
+    expect(k.moveWindup).toBe(0);
+    expect(k.swagger).toBeGreaterThan(15);
+  });
+
+  it('is off entirely when switched off', () => {
+    const sim = ready('pogo', { swagger: false });
+    const k = sim.karts[0]!;
+    k.swagger = 0;
+    k.body.setLinvel({ x: 0, y: 14, z: 0 }, true);
+    settle(sim, 60);
+    expect(k.swagger).toBe(0);
+  });
+
+  it('Pogo launches the kart high', () => {
+    const sim = ready('pogo');
+    const y0 = sim.karts[0]!.position.y;
+    fire(sim);
+    let top = y0;
+    for (let i = 0; i < 90; i++) {
+      sim.step([press({}), press({}), press({})]);
+      top = Math.max(top, sim.karts[0]!.position.y);
+    }
+    expect(top - y0).toBeGreaterThan(3);
+  });
+
+  it('Roar wobbles karts close by; Drop the Beat swaps their steering', () => {
+    const roar = ready('roar');
+    fire(roar);
+    expect(roar.karts[1]!.wobbleTime).toBeGreaterThan(0);
+    expect(roar.karts[2]!.wobbleTime).toBe(0); // far away
+    const beat = ready('beat');
+    fire(beat);
+    expect(beat.karts[1]!.steerSwapTime).toBeGreaterThan(0);
+  });
+
+  it('Slow Clap slows the karts just ahead, not behind', () => {
+    const sim = ready('slowClap');
+    putAt(sim, 1, 150, 2);
+    fire(sim);
+    expect(sim.karts[1]!.slowTime).toBeGreaterThan(0);
+    expect(sim.karts[2]!.slowTime).toBe(0);
+  });
+
+  it('Too Cool shrugs off peels and whacks; Boulder is heavy and shoves', () => {
+    const cool = ready('tooCool');
+    fire(cool);
+    const me = cool.karts[0]!;
+    expect(me.immune).toBe(true);
+    cool.items.spinOut(me);
+    expect(me.spinning).toBe(false);
+    const rock = ready('boulder');
+    fire(rock);
+    expect(rock.karts[0]!.boulderTime).toBeGreaterThan(0);
+    expect(rock.karts[0]!.body.mass()).toBeGreaterThan(2 * 220);
+  });
+
+  it('Feed the Troop leaves bananas on the road and refills her hands', () => {
+    const sim = ready('feed');
+    fire(sim);
+    expect(sim.items.loose).toHaveLength(SWAGGER.feedBananas);
+    expect(sim.karts[0]!.item).toBe('banana');
+  });
+
+  it('No Brakes boosts and stops wall bonks', () => {
+    const sim = ready('noBrakes');
+    fire(sim);
+    expect(sim.karts[0]!.noBrakesTime).toBeGreaterThan(0);
+    expect(sim.karts[0]!.boosting).toBe(true);
   });
 });
 

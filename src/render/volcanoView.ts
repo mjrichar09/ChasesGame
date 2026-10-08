@@ -28,6 +28,7 @@ export interface VolcanoView {
 export function buildVolcanoView(track: Track, terrain: Terrain): VolcanoView {
   const group = new THREE.Group();
   group.add(terrainMesh(terrain));
+  group.add(boulders(track, terrain));
   group.add(ocean(terrain));
   const lava = lavaStrip(track, terrain);
   group.add(lava.mesh);
@@ -73,9 +74,64 @@ function terrainMesh(t: Terrain): THREE.Mesh {
     colors.set([c.r, c.g, c.b], i * 3);
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  const mesh = new THREE.Mesh(geo, new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: toon(0).gradientMap }));
+  // World-space UVs for a noise texture, so the slopes are not one flat colour.
+  const uv = new Float32Array((t.vertices.length / 3) * 2);
+  for (let i = 0; i < t.vertices.length / 3; i++) {
+    uv[i * 2] = t.vertices[i * 3]! / 14;
+    uv[i * 2 + 1] = t.vertices[i * 3 + 2]! / 14;
+  }
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  const mesh = new THREE.Mesh(
+    geo,
+    new THREE.MeshToonMaterial({ vertexColors: true, map: groundNoise(), gradientMap: toon(0).gradientMap }),
+  );
   mesh.receiveShadow = true;
   return mesh;
+}
+
+/** Mottled light/dark speckle that the terrain's colours are multiplied by. */
+function groundNoise(): THREE.CanvasTexture {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const g = c.getContext('2d')!;
+  g.fillStyle = '#ffffff';
+  g.fillRect(0, 0, 256, 256);
+  const rng = new Rng(29);
+  for (let i = 0; i < 2600; i++) {
+    const v = Math.floor(rng.range(150, 255));
+    g.fillStyle = `rgb(${v},${v},${v})`;
+    g.beginPath();
+    g.arc(rng.range(0, 256), rng.range(0, 256), rng.range(1, 5), 0, Math.PI * 2);
+    g.fill();
+  }
+  const tex = new THREE.CanvasTexture(g.canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/** Boulders strewn over the bare upper slopes, half sunk in the ash. */
+function boulders(track: Track, terrain: Terrain): THREE.InstancedMesh {
+  const rng = new Rng(63);
+  const list: THREE.Matrix4[] = [];
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  for (let i = 0; i < 900 && list.length < 260; i++) {
+    const x = terrain.x0 + rng.next() * terrain.nx * terrain.dx;
+    const z = terrain.z0 + rng.next() * terrain.nz * terrain.dx;
+    const y = terrainHeight(terrain, x, z);
+    if (Number.isNaN(y) || y < 30) continue;
+    const near = track.project({ x, y, z });
+    if (Math.abs(near.lateral) < track.at(near.s).halfWidth + 4) continue;
+    const sc = rng.range(0.8, 3.2);
+    q.setFromEuler(new THREE.Euler(rng.next(), rng.next() * 6, rng.next()));
+    m.compose(new THREE.Vector3(x, y - sc * 0.3, z), q, new THREE.Vector3(sc * 1.2, sc * 0.8, sc));
+    list.push(m.clone());
+  }
+  const inst = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 0), toon(0x4a403a), list.length);
+  list.forEach((mm, i) => inst.setMatrixAt(i, mm));
+  inst.castShadow = true;
+  return inst;
 }
 
 function ocean(t: Terrain): THREE.Mesh {

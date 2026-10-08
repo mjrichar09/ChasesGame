@@ -11,18 +11,27 @@
 
 import * as THREE from 'three';
 import type { TrackLook } from '../data/tracks/looks.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 
 export interface Quality {
   pixelRatio: number;
   shadows: boolean;
   particles: number;
+  /** Bloom, grade and vignette passes. */
+  post: boolean;
+  /** Ink outlines on karts and gorillas. */
+  ink: boolean;
 }
 
 export function pickQuality(): Quality {
   const touch = matchMedia('(pointer: coarse)').matches;
   const small = Math.min(screen.width, screen.height) < 820;
-  if (touch || small) return { pixelRatio: Math.min(devicePixelRatio, 1.5), shadows: false, particles: 0.5 };
-  return { pixelRatio: Math.min(devicePixelRatio, 2), shadows: true, particles: 1 };
+  if (touch || small) return { pixelRatio: Math.min(devicePixelRatio, 1.5), shadows: false, particles: 0.5, post: false, ink: false };
+  return { pixelRatio: Math.min(devicePixelRatio, 2), shadows: true, particles: 1, post: true, ink: true };
 }
 
 export class Stage {
@@ -31,6 +40,8 @@ export class Stage {
   readonly sun: THREE.DirectionalLight;
   readonly quality: Quality;
   private readonly hemi: THREE.HemisphereLight;
+  private composer: EffectComposer | null = null;
+  private bloom: UnrealBloomPass | null = null;
   private readonly sky: THREE.Mesh;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -87,6 +98,33 @@ export class Stage {
 
   resize(w: number, h: number): void {
     this.renderer.setSize(w, h, false);
+    this.composer?.setSize(w, h);
+    this.bloom?.resolution.set(w, h);
+  }
+
+  /**
+   * Draw a frame. On desktop it goes through a light post stack: a gentle
+   * bloom (glows, lava, pickups, sunbeams), then a grade — a touch more
+   * saturation and contrast for the cartoon — and a soft vignette.
+   */
+  render(camera: THREE.Camera): void {
+    if (!this.quality.post) {
+      this.renderer.render(this.scene, camera);
+      return;
+    }
+    if (!this.composer) {
+      const size = this.renderer.getSize(new THREE.Vector2());
+      this.composer = new EffectComposer(this.renderer);
+      this.composer.setPixelRatio(this.quality.pixelRatio);
+      this.composer.setSize(size.x, size.y);
+      this.composer.addPass(new RenderPass(this.scene, camera));
+      this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.32, 0.45, 0.86);
+      this.composer.addPass(this.bloom);
+      this.composer.addPass(new ShaderPass(GRADE));
+      this.composer.addPass(new OutputPass());
+    }
+    (this.composer.passes[0] as RenderPass).camera = camera;
+    this.composer.render();
   }
 }
 
@@ -120,3 +158,29 @@ function skyDome(): THREE.Mesh {
   dome.renderOrder = -1;
   return dome;
 }
+
+/** Saturation, contrast and a soft vignette, in linear space before output. */
+const GRADE = {
+  uniforms: { tDiffuse: { value: null }, saturation: { value: 1.14 }, contrast: { value: 1.06 }, vignette: { value: 0.32 } },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }`,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform float saturation;
+    uniform float contrast;
+    uniform float vignette;
+    varying vec2 vUv;
+    void main() {
+      vec4 c = texture2D(tDiffuse, vUv);
+      float l = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
+      vec3 col = mix(vec3(l), c.rgb, saturation);
+      col = (col - 0.18) * contrast + 0.18;
+      float d = distance(vUv, vec2(0.5));
+      col *= 1.0 - vignette * smoothstep(0.35, 0.85, d);
+      gl_FragColor = vec4(max(col, 0.0), c.a);
+    }`,
+};

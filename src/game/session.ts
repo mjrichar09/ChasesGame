@@ -15,6 +15,7 @@
 import * as THREE from 'three';
 import { GORILLAS, type Gorilla } from '../data/gorillas.js';
 import { TRACKS } from '../data/tracks/index.js';
+import { RACE } from '../data/tuning.js';
 import { LOOKS } from '../data/tracks/looks.js';
 import { Sound } from '../audio/sound.js';
 import { ChaseCam } from '../render/chaseCam.js';
@@ -25,8 +26,9 @@ import { Stage } from '../render/scene.js';
 import { type TrackView, buildTrackView } from '../render/trackView.js';
 import { toon } from '../render/toon.js';
 import { AiDriver, type Difficulty, fieldLevels, personality } from '../sim/driver.js';
+import { MOVES, MOVE_NAMES } from '../sim/swagger.js';
 import { type DriverInput, NEUTRAL_INPUT } from '../sim/input.js';
-import { Items } from '../sim/items.js';
+import { type ItemEvent, Items } from '../sim/items.js';
 import { RaceSim } from '../sim/race.js';
 import { Rng } from '../sim/rng.js';
 import { Track } from '../sim/track.js';
@@ -49,7 +51,7 @@ const params = new URLSearchParams(location.search);
 const DEV_LAPS = Number(params.get('laps')) || undefined;
 const AUTOPILOT = params.has('autopilot');
 /** `?give=parrot` (or banana/snake): hand the player that item at GO, for testing. */
-const GIVE = params.get('give') as 'banana' | 'snake' | 'parrot' | null;
+const GIVE = params.get('give') as 'banana' | 'snake' | 'parrot' | 'swagger' | null;
 /** `?eventlap=1`: mid-race track events fire on that lap instead (testing). */
 const EVENT_LAP = Number(params.get('eventlap')) || 0;
 
@@ -90,6 +92,9 @@ export class Game {
   private playerFinishedAt: number | null = null;
   private seed = 1;
   private difficulty: Difficulty = loadDifficulty();
+  private swaggerOn = loadSwagger();
+  /** Expanding rings for area moves (Roar, Drop the Beat, Slow Clap). */
+  private rings: { mesh: THREE.Mesh; t: number; life: number; size: number }[] = [];
 
   // Menu preview.
   private preview: KartView | null = null;
@@ -137,6 +142,15 @@ export class Game {
     this.menu.onPreview = (i) => this.showPreview(i);
     this.menu.onTrack = (i) => this.selectTrack(i);
     this.menu.difficulty = this.difficulty;
+    this.menu.swagger = this.swaggerOn;
+    this.menu.onSwagger = (on) => {
+      this.swaggerOn = on;
+      try {
+        localStorage.setItem('jj-swagger', on ? 'on' : 'off');
+      } catch {
+        // Storage blocked — lasts this visit.
+      }
+    };
     this.menu.onDifficulty = (d) => {
       this.difficulty = d;
       try {
@@ -203,7 +217,7 @@ export class Game {
 
   private showPreview(i: number): void {
     if (this.preview) this.podium.remove(this.preview.object);
-    this.preview = new KartView(GORILLAS[i]!);
+    this.preview = new KartView(GORILLAS[i]!, { ink: this.stage.quality.ink });
     this.preview.restPose();
     this.preview.object.position.set(0, 1.4, 0);
     this.podium.add(this.preview.object);
@@ -242,10 +256,7 @@ export class Game {
     this.seed = (this.seed * 7919 + 13) % 100000;
     const base = TRACKS[this.trackIndex]!;
     const def = EVENT_LAP && base.events ? { ...base, events: base.events.map((e) => ({ ...e, lap: EVENT_LAP })) } : base;
-    const sim = new RaceSim(def, { seed: this.seed, laps: DEV_LAPS });
-    this.sim = sim;
     this.player = PLAYER_SLOT;
-
     // The player's gorilla in their slot; the other seven fill the grid in a shuffled order.
     const others = GORILLAS.filter((_, i) => i !== this.chosen);
     const rng = new Rng(this.seed);
@@ -253,7 +264,15 @@ export class Game {
       const j = Math.floor(rng.next() * (i + 1));
       [others[i], others[j]] = [others[j]!, others[i]!];
     }
-    this.roster = sim.karts.map((_, i) => (i === this.player ? GORILLAS[this.chosen]! : others.shift()!));
+    this.roster = Array.from({ length: RACE.karts }, (_, i) => (i === this.player ? GORILLAS[this.chosen]! : others.shift()!));
+    // Each gorilla brings its own signature move.
+    const sim = new RaceSim(def, {
+      seed: this.seed,
+      laps: DEV_LAPS,
+      swagger: this.swaggerOn,
+      moves: this.roster.map((g) => MOVES[GORILLAS.indexOf(g)]!),
+    });
+    this.sim = sim;
     // A spread of skill across the field, set by the difficulty.
     const levels = fieldLevels(this.difficulty, sim.karts.length - 1, new Rng(this.seed + 7));
     let next = 0;
@@ -261,7 +280,8 @@ export class Game {
       (k) => new AiDriver(personality(sim.rng, k.index, k.index === this.player ? 0.8 : levels[next++]!)),
     );
     this.views = sim.karts.map((k, i) => {
-      const v = new KartView(this.roster[i]!);
+      const v = new KartView(this.roster[i]!, { ink: this.stage.quality.ink });
+      this.raceGroup.add(v.shadow);
       v.capture(k, true);
       this.raceGroup.add(v.object);
       return v;
@@ -308,11 +328,14 @@ export class Game {
       this.acc -= sim.dt;
       const inputs = sim.karts.map((k, i) => {
         if (i === this.player && !playerDone && !AUTOPILOT) return human;
-        return this.drivers[i]!.drive(sim.dt, k, sim.progress[i]!, sim.track, sim.karts, sim.items, playerPr.dist);
+        return this.drivers[i]!.drive(sim.dt, k, sim.progress[i]!, sim.track, sim.karts, sim.items, playerPr.dist, sim);
       });
       const wasCountdown = sim.phase === 'countdown';
       sim.step(wasCountdown ? sim.karts.map(() => NEUTRAL_INPUT) : inputs);
-      if (GIVE && wasCountdown && sim.phase === 'racing') Items.give(sim.karts[this.player]!, GIVE);
+      if (GIVE && wasCountdown && sim.phase === 'racing') {
+        if (GIVE === 'swagger') sim.karts[this.player]!.swagger = 100;
+        else Items.give(sim.karts[this.player]!, GIVE);
+      }
       sim.karts.forEach((k, i) => this.views[i]!.capture(k, sim.respawned.includes(i)));
       this.handleEvents(sim);
     }
@@ -384,7 +407,7 @@ export class Game {
       const label = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 1.0), new THREE.MeshBasicMaterial({ map: textTexture(String(place + 1), '#2a1a0e', '#fff6dd'), transparent: true }));
       label.position.set(step.x, step.h * 0.5, 1.61);
       group.add(label);
-      const view = new KartView(this.roster[kartIndex]!);
+      const view = new KartView(this.roster[kartIndex]!, { ink: this.stage.quality.ink });
       view.restPose();
       view.object.position.set(step.x, step.h + 1.0, 0);
       group.add(view.object);
@@ -453,6 +476,9 @@ export class Game {
           if (vol > 0) this.sound.play('splash', vol);
           if (e.kart !== this.player && vol > 0.2) this.hud.shout(`${this.roster[e.kart]!.name.toUpperCase()} TOASTED`, 'bad', 1.2);
           break;
+        case 'swagger':
+          this.swaggerEvent(e);
+          break;
         case 'bonk':
           // Splinters and dust off the logs.
           this.fx.emit({ pos: v(e.pos), count: Math.round(6 + e.strength * 14), color: [0x8a5a33, 0xd2b07a], speed: [2, 6], size: [0.25, 0.6], life: [0.3, 0.7], gravity: 8 });
@@ -502,6 +528,96 @@ export class Game {
       }
       this.wasAir[i] = air;
     });
+  }
+
+  /** A swagger move: wind-up celebration and sting, then the move's own show. */
+  private swaggerEvent(e: Extract<ItemEvent, { type: 'swagger' }>): void {
+    const who = this.roster[e.kart]!;
+    const mine = e.kart === this.player;
+    const vol = mine ? 1 : this.nearPlayer(e.pos);
+    const at = new THREE.Vector3(e.pos.x, e.pos.y, e.pos.z);
+    if (e.phase === 'windup') {
+      this.views[e.kart]?.celebrate(1.4, true);
+      if (vol > 0) this.sound.play('swagger', Math.max(0.4, vol));
+      if (mine) this.hud.shout(`${MOVE_NAMES[e.move]}!`, 'good', 1.3);
+      else if (vol > 0.3) this.hud.shout(`${who.name.split(' ')[0]!.toUpperCase()}: ${MOVE_NAMES[e.move]}!`, 'bad', 1.1);
+      this.fx.emit({ pos: at.clone().setY(at.y + 2), count: 24, color: [0xffcc33, 0xfff6dd], speed: [3, 7], size: [0.3, 0.6], life: [0.4, 0.8], gravity: 3 });
+      return;
+    }
+    if (mine) this.cam.kick(0.25);
+    switch (e.move) {
+      case 'roar':
+        this.ring(at, 0xffcc33, 12);
+        if (vol > 0) this.sound.play('land', vol);
+        break;
+      case 'beat':
+        this.ring(at, 0x9b5cf6, 30);
+        this.ring(at, 0x9b5cf6, 20);
+        break;
+      case 'slowClap':
+        this.ring(at, 0xffffff, 25);
+        break;
+      case 'pogo':
+        this.fx.emit({ pos: at.clone().setY(at.y - 0.6), count: 30, color: [0xd2b07a, 0xbf9a62], speed: [3, 8], dir: new THREE.Vector3(0, 0.3, 0), spread: 1, size: [0.6, 1.2], life: [0.5, 1], gravity: 2 });
+        if (vol > 0) this.sound.play('land', vol);
+        break;
+      case 'feed':
+        this.fx.emit({ pos: at.clone().setY(at.y + 1), count: 30, color: [0xffe14d, 0xfff6b0], speed: [3, 8], size: [0.3, 0.6], life: [0.5, 1], gravity: 4 });
+        break;
+      default:
+        this.fx.emit({ pos: at.clone().setY(at.y + 1), count: 20, color: [0xffcc33, 0xff8a1f], speed: [3, 7], size: [0.3, 0.6], life: [0.4, 0.8] });
+    }
+    // On the receiving end.
+    if (e.victims?.includes(this.player)) {
+      const msg = e.move === 'roar' ? 'ROARED AT!' : e.move === 'beat' ? 'STEERING SWAPPED!' : e.move === 'slowClap' ? 'SLOW-CLAPPED!' : '';
+      if (msg) this.hud.shout(msg, 'bad', 1.2);
+      this.cam.kick(0.35);
+    }
+  }
+
+  /** Contact shadows: on the surface under each kart (road, ramp or branch top). */
+  private placeShadows(sim: RaceSim): void {
+    const t = sim.track;
+    sim.karts.forEach((k, i) => {
+      const view = this.views[i]!;
+      const pr = sim.progress[i]!;
+      const smp = t.at(pr.s);
+      if (k.out || !smp.road || Math.abs(pr.lateral) > smp.halfWidth + 1) {
+        view.shadow.visible = false;
+        return;
+      }
+      const p = t.pointAt(pr.s, pr.lateral);
+      const lift = t.kickerHeight(pr.s, pr.lateral) - t.surfaceDrop(pr.lateral, smp.halfWidth);
+      const n = new THREE.Vector3(smp.n.x, smp.n.y, smp.n.z);
+      view.placeShadow(new THREE.Vector3(p.x, p.y, p.z).addScaledVector(n, lift), n);
+    });
+  }
+
+  /** An expanding, fading ring on the ground. */
+  private ring(at: THREE.Vector3, color: number, size: number): void {
+    const mesh = new THREE.Mesh(
+      new THREE.RingGeometry(0.85, 1, 48),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
+    );
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.copy(at).setY(at.y - 0.4);
+    this.stage.scene.add(mesh);
+    this.rings.push({ mesh, t: 0, life: 0.7, size });
+  }
+
+  private updateRings(dt: number): void {
+    for (let i = this.rings.length - 1; i >= 0; i--) {
+      const r = this.rings[i]!;
+      r.t += dt;
+      const f = r.t / r.life;
+      r.mesh.scale.setScalar(0.5 + f * r.size);
+      (r.mesh.material as THREE.MeshBasicMaterial).opacity = 0.9 * (1 - f);
+      if (f >= 1) {
+        this.stage.scene.remove(r.mesh);
+        r.mesh.geometry.dispose();
+        this.rings.splice(i, 1);
+      }
+    }
   }
 
   /** The jungle changes: callout, sound, shake, and a burst at the spot. */
@@ -642,6 +758,7 @@ export class Game {
     } else if (sim) {
       const alpha = this.acc / sim.dt;
       sim.karts.forEach((k, i) => this.views[i]!.update(k, alpha, dt));
+      this.placeShadows(sim);
       this.itemsView?.update(sim.items, this.time);
       if (this.state !== 'paused') this.ambientFx(sim);
       const me = this.views[this.player]!;
@@ -678,8 +795,14 @@ export class Game {
       this.menuCamera(dt);
     }
 
-    if (this.state !== 'paused') this.fx.update(dt);
-    this.stage.renderer.render(this.stage.scene, this.cam.camera);
+    if (this.state !== 'paused') {
+      this.fx.update(dt);
+      this.updateRings(dt);
+    }
+    // The touch ★ shows only with a full meter.
+    if (this.sim && this.state === 'race') this.touch.setSwaggerReady(this.sim.swaggerOn && this.sim.karts[this.player]!.swagger >= 100);
+    this.venues[this.trackIndex]?.view.sky?.update(this.time, this.cam.camera);
+    this.stage.render(this.cam.camera);
   }
 
   /** Frame the finish podium from in front, drifting slowly. */
@@ -760,4 +883,12 @@ function loadDifficulty(): Difficulty {
     // Storage blocked.
   }
   return 'normal';
+}
+
+function loadSwagger(): boolean {
+  try {
+    return localStorage.getItem('jj-swagger') !== 'off';
+  } catch {
+    return true;
+  }
 }

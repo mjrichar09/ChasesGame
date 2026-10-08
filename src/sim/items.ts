@@ -17,6 +17,7 @@
 import { ITEMS } from '../data/tuning.js';
 import type { DriverInput } from './input.js';
 import type { ItemKind, Kart } from './kart.js';
+import type { Move } from './swagger.js';
 import { type Vec3, add, dot, scale, sub, v3 } from './math.js';
 import type { Rng } from './rng.js';
 import type { Track } from './track.js';
@@ -47,13 +48,23 @@ export type ItemEvent =
   | { type: 'bonk'; kart: number; pos: Vec3; strength: number }
   | { type: 'parrot'; kart: number; pos: Vec3 }
   | { type: 'toasted'; kart: number; pos: Vec3 }
-  | { type: 'track'; kind: 'treefall' | 'flood' | 'snap'; pos: Vec3; stage?: number };
+  | { type: 'track'; kind: 'treefall' | 'flood' | 'snap'; pos: Vec3; stage?: number }
+  | { type: 'swagger'; kart: number; move: Move; pos: Vec3; phase: 'windup' | 'hit'; victims?: number[] };
+
+/** A banana bunch lying loose on the road (Mama Mango's Feed the Troop): first come, first served. */
+export interface Loose {
+  id: number;
+  pos: Vec3;
+  ttl: number;
+}
 
 const rising = (now: boolean, before: boolean) => now && !before;
 
 export class Items {
   readonly pickups: PickupState[];
   readonly peels: Peel[] = [];
+  readonly loose: Loose[] = [];
+  private nextLoose = 1;
   events: ItemEvent[] = [];
   private nextPeel = 1;
   private readonly rng: Rng;
@@ -96,6 +107,10 @@ export class Items {
       }
     }
     for (const peel of this.peels) peel.age += dt;
+    for (let i = this.loose.length - 1; i >= 0; i--) {
+      this.loose[i]!.ttl -= dt;
+      if (this.loose[i]!.ttl <= 0) this.loose.splice(i, 1);
+    }
 
     for (const kart of karts) {
       if (kart.out) continue;
@@ -106,9 +121,38 @@ export class Items {
     }
   }
 
+  /** Leave a banana bunch on the road at `at` (dropped onto the surface). */
+  addLoose(at: Vec3, ttl: number): void {
+    const proj = this.track.project(at, -1);
+    const k = this.track.at(proj.s);
+    const pos = add(sub(at, scale(k.n, proj.height)), v3(0, 1.0, 0));
+    this.loose.push({ id: this.nextLoose++, pos, ttl });
+  }
+
+  /** Drop a peel behind `kart`, `back` metres further back than usual. */
+  dropPeel(kart: Kart, back = 0): void {
+    const f = kart.forward;
+    let at = add(kart.position, scale(f, -2.2 - back));
+    const proj = this.track.project(at, -1);
+    const k = this.track.at(proj.s);
+    if (k.road) at = sub(at, scale(k.n, proj.height));
+    this.peels.push({ id: this.nextPeel++, pos: at, yaw: Math.atan2(f.x, f.z), owner: kart.index, age: 0 });
+    if (this.peels.length > ITEMS.maxPeels) this.peels.shift();
+    this.events.push({ type: 'peelDrop', kart: kart.index, pos: at });
+  }
+
   private collect(kart: Kart, pos: Vec3): void {
     if (kart.item !== 'none' || kart.flying) return;
     const r2 = ITEMS.pickupRadius * ITEMS.pickupRadius;
+    for (let i = 0; i < this.loose.length; i++) {
+      const l = this.loose[i]!;
+      const d = sub(pos, l.pos);
+      if (d.x * d.x + d.y * d.y * 0.5 + d.z * d.z > r2) continue;
+      Items.give(kart, 'banana');
+      this.loose.splice(i, 1);
+      this.events.push({ type: 'pickup', kart: kart.index, kind: 'banana', pos: l.pos });
+      return;
+    }
     for (const p of this.pickups) {
       if (!p.active) continue;
       const d = sub(pos, p.pos);
@@ -179,7 +223,7 @@ export class Items {
     const fwd = kart.forward;
     let best: { kart: Kart; d: number } | null = null;
     for (const other of karts) {
-      if (other === kart || other.flying || other.out) continue;
+      if (other === kart || other.flying || other.out || other.immune) continue;
       const rel = sub(other.position, pos);
       const lat = dot(rel, right) * side;
       const lon = dot(rel, fwd);
@@ -213,7 +257,7 @@ export class Items {
   }
 
   private peelHits(kart: Kart, pos: Vec3): void {
-    if (kart.spinning || kart.flying) return;
+    if (kart.spinning || kart.flying || kart.immune) return;
     const r2 = ITEMS.peelRadius * ITEMS.peelRadius;
     for (let i = 0; i < this.peels.length; i++) {
       const peel = this.peels[i]!;
@@ -228,6 +272,7 @@ export class Items {
   }
 
   spinOut(kart: Kart): void {
+    if (kart.immune) return;
     kart.spinTime = ITEMS.spinTime;
     kart.boostTime = 0;
   }

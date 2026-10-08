@@ -30,6 +30,8 @@ export class Menu {
   onTrack: ((track: number) => void) | null = null;
   onDifficulty: ((d: Difficulty) => void) | null = null;
   difficulty: Difficulty = 'normal';
+  onSwagger: ((on: boolean) => void) | null = null;
+  swagger = true;
   onResume: (() => void) | null = null;
   onRestart: (() => void) | null = null;
   onQuit: (() => void) | null = null;
@@ -92,7 +94,12 @@ export class Menu {
         <div class="cards">${cards}</div>
         <div class="select-foot">
           <div class="keys">
-            <b>Drive</b> W/S or ↑↓ · <b>Steer</b> A/D or ←→ · <b>Banana / item</b> Space · <b>Whack</b> Q / E · <b>Look back</b> C · <b>Pause</b> Esc
+            <b>Drive</b> W/S or ↑↓ · <b>Steer</b> A/D or ←→ · <b>Banana / item</b> Space · <b>Whack</b> Q / E · <b>Swagger</b> hold F · <b>Look back</b> C · <b>Pause</b> Esc
+          </div>
+          <div class="difficulty swagger-toggle" role="radiogroup" aria-label="Swagger">
+            <span>Swagger</span>
+            <button data-sw="on" class="${this.swagger ? 'on' : ''}">On</button>
+            <button data-sw="off" class="${this.swagger ? '' : 'on'}">Off</button>
           </div>
           <div class="difficulty" role="radiogroup" aria-label="Opponents">
             <span>Rivals</span>
@@ -119,10 +126,17 @@ export class Menu {
         this.pickTrack(Number(b.dataset.t));
       });
     }
-    for (const b of this.root.querySelectorAll<HTMLButtonElement>('.difficulty button')) {
+    for (const b of this.root.querySelectorAll<HTMLButtonElement>('.swagger-toggle button')) {
+      b.addEventListener('click', () => {
+        this.swagger = b.dataset.sw === 'on';
+        for (const o of this.root.querySelectorAll('.swagger-toggle button')) o.classList.toggle('on', o === b);
+        this.onSwagger?.(this.swagger);
+      });
+    }
+    for (const b of this.root.querySelectorAll<HTMLButtonElement>('.difficulty:not(.swagger-toggle) button')) {
       b.addEventListener('click', () => {
         this.difficulty = b.dataset.d as Difficulty;
-        for (const o of this.root.querySelectorAll('.difficulty button')) o.classList.toggle('on', o === b);
+        for (const o of this.root.querySelectorAll('.difficulty:not(.swagger-toggle) button')) o.classList.toggle('on', o === b);
         this.onDifficulty?.(this.difficulty);
       });
     }

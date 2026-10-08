@@ -15,6 +15,7 @@
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { ITEMS, KART, PARROT, SIM, WATER } from '../data/tuning.js';
 import { TREE } from './events.js';
+import type { Move } from './swagger.js';
 import type { DriverInput } from './input.js';
 import { NEUTRAL_INPUT } from './input.js';
 import {
@@ -120,6 +121,49 @@ export class Kart {
   brush = false;
   /** Planing across the water's surface (fast and straight). */
   skimming = false;
+
+  // ---- Swagger (see sim/swagger.ts)
+  /** This gorilla's signature move. */
+  move: Move = 'roar';
+  /** 0..100. Full = one move. */
+  swagger = 0;
+  /** Seconds the swagger button has been held with a full meter. */
+  swaggerHold = 0;
+  /** Seconds left of the wind-up before the move hits (0 = none). */
+  moveWindup = 0;
+  /** Seconds since the last move was triggered (for the renderer). */
+  moveT = 99;
+  /** Seated show-off after a hit, s (renderer celebrates). */
+  showOff = 0;
+  noBrakesTime = 0;
+  slowTime = 0;
+  steerSwapTime = 0;
+  coolTime = 0;
+  boulderTime = 0;
+  /** Touched down this step after real air (for the clean-landing bonus). */
+  landedThisStep = false;
+
+  /** Too cool or a boulder: peels, whacks, wobbles, bonks and lava pass it by. */
+  get immune(): boolean {
+    return this.coolTime > 0 || this.boulderTime > 0;
+  }
+
+  /** Scale the kart's mass (the boulder is heavy). 1 restores it. */
+  setMassScale(k: number): void {
+    const m = KART.mass * k;
+    const h = KART.half;
+    this.body.setAdditionalMassProperties(
+      m,
+      { x: 0, y: -KART.comDrop, z: 0 },
+      {
+        x: (m / 12) * (4 * h.y * h.y + 4 * h.z * h.z) * 1.2,
+        y: (m / 12) * (4 * h.x * h.x + 4 * h.z * h.z),
+        z: (m / 12) * (4 * h.x * h.x + 4 * h.y * h.y) * 1.4,
+      },
+      { x: 0, y: 0, z: 0, w: 1 },
+      true,
+    );
+  }
   /** Engine and top-speed multiplier: AI skill and rubber-banding. 1 for players. */
   power = 1;
   private wasAirborne = false;
@@ -249,6 +293,7 @@ export class Kart {
     this.wobbleTime = 0;
     this.upsideTime = 0;
     this.flyTime = 0;
+    this.moveWindup = 0;
     for (const w of this.wheels) w.compression = 0;
   }
 
@@ -260,10 +305,12 @@ export class Kart {
       out.brake = 0;
       out.steer = 0;
     }
-    if (this.wobbleTime > 0) {
+    if (this.wobbleTime > 0 && !this.immune) {
       out.steer = clamp(out.steer + Math.sin(this.wobbleTime * 28) * 0.7, -1, 1);
       out.throttle *= 0.5;
     }
+    // Drop the Beat: left is right.
+    if (this.steerSwapTime > 0) out.steer = -out.steer;
     if (this.boostTime > 0) {
       out.throttle = 1;
       out.brake = 0;
@@ -278,6 +325,20 @@ export class Kart {
     this.boostTime = Math.max(0, this.boostTime - dt);
     this.spinTime = Math.max(0, this.spinTime - dt);
     this.wobbleTime = Math.max(0, this.wobbleTime - dt);
+    this.noBrakesTime = Math.max(0, this.noBrakesTime - dt);
+    this.slowTime = Math.max(0, this.slowTime - dt);
+    this.steerSwapTime = Math.max(0, this.steerSwapTime - dt);
+    this.coolTime = Math.max(0, this.coolTime - dt);
+    this.showOff = Math.max(0, this.showOff - dt);
+    this.moveT += dt;
+    if (this.boulderTime > 0) {
+      this.boulderTime -= dt;
+      if (this.boulderTime <= 0) {
+        this.boulderTime = 0;
+        this.setMassScale(1);
+      }
+    }
+    this.landedThisStep = false;
     this.swingCooldown = Math.max(0, this.swingCooldown - dt);
     if (this.swingSide !== 0) {
       this.swingTime += dt;
@@ -301,7 +362,9 @@ export class Kart {
     const fwd = this.forward;
     const speed = dot(vel, fwd);
     const boost = this.boostTime > 0;
-    const top = KART.topSpeed * this.power * (boost ? ITEMS.boostTopSpeed : 1);
+    // Slow-clapped karts lose a chunk of engine and top speed.
+    const slowed = this.slowTime > 0 ? 0.7 : 1;
+    const top = KART.topSpeed * this.power * slowed * (boost ? ITEMS.boostTopSpeed : 1);
     const mass = KART.mass;
 
     // Steering eases toward its target, with less lock at speed.
@@ -345,7 +408,10 @@ export class Kart {
       this.airTime += dt;
       this.wasAirborne = true;
     } else {
-      if (this.wasAirborne && this.airTime > 0.15) this.lastLanding = Math.max(0, -vel.y);
+      if (this.wasAirborne && this.airTime > 0.15) {
+        this.lastLanding = Math.max(0, -vel.y);
+        if (this.airTime > 0.3) this.landedThisStep = true;
+      }
       this.wasAirborne = false;
       this.airTime = 0;
     }
@@ -368,7 +434,8 @@ export class Kart {
 
       const load = Math.max(c.load, staticLoad * 0.35);
       const grip =
-        KART.gripMu * load * (w.front ? 1 : KART.rearGrip) * (spinning ? 0.25 : 1) * (this.wet && !this.skimming ? WATER.grip : 1) * (this.brush ? TREE.grip : 1);
+        KART.gripMu * load * (w.front ? 1 : KART.rearGrip) * (spinning ? 0.25 : 1) * (this.wet && !this.skimming ? WATER.grip : 1) *
+        (this.brush && this.boulderTime <= 0 ? TREE.grip : 1) * (this.noBrakesTime > 0 ? 1.5 : 1);
       // A tyre that has broken away grips less than one that hasn't: past the
       // limit the force falls toward `slideGrip`. That is what makes a corner
       // taken too fast run wide into the logs instead of scrubbing off speed
@@ -381,7 +448,7 @@ export class Kart {
       let lon = 0;
       if (input.throttle > 0) {
         const pull = speed < top ? 1 - Math.max(0, speed) / top : 0;
-        lon += (input.throttle * KART.engineForce * this.power * (boost ? ITEMS.boostForce : 1) * pull) / 4;
+        lon += (input.throttle * KART.engineForce * this.power * slowed * (boost ? ITEMS.boostForce : 1) * pull) / 4;
       }
       if (input.brake > 0) {
         if (speed > 0.8) lon -= (input.brake * KART.brakeForce) / 4;
@@ -411,8 +478,8 @@ export class Kart {
     } else if (!this.wet) {
       this.skimming = false;
     }
-    // Leaves and branches: slow going.
-    if (this.brush && grounded > 0) {
+    // Leaves and branches: slow going (a boulder flattens them).
+    if (this.brush && grounded > 0 && this.boulderTime <= 0) {
       body.applyImpulse(scale(v3(vel.x, 0, vel.z), -mass * TREE.drag * dt), true);
     }
 

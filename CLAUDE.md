@@ -56,6 +56,15 @@ Playwright. Deploys to GitHub Pages (`.github/workflows/pages.yml`).
   `sim.events` — it has its own `Track` instance, so never read mutable track
   state from the render copy during a race.
 - Leaving the page (hidden/blur/pagehide) suspends audio and pauses the race.
+- Swagger lives in `sim/swagger.ts` (meter, earnings/costs, hold → wind-up → move,
+  `goodMoment` for the AI). Moves come from `RaceOptions.moves` (roster order =
+  `MOVES`). Overtakes only pay once a place is held 0.6 s (side-by-side karts
+  swapping places every step used to farm it).
+- Looks: `render/polish.ts` (rim light, ink outlines on desktop, contact shadows,
+  clouds/sun, roadside tufts); `Stage.render` runs bloom + grade + vignette on
+  desktop only (`Quality.post`). Headless SwiftShader is very slow with post on —
+  use a phone viewport (`--mobile`) for quick visual checks.
+- `npx tsx tools/looks.ts <tag>` shoots every track at a fixed moment; `tools/sheet.ts` tiles shots.
 - AI skill: every derived trait comes from `Personality.level`; a field's levels come
   from `fieldLevels(difficulty)`. Tools/tests that need a *good* driver pass level 1
   explicitly — the default personality is a mid-field driver.

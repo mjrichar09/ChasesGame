@@ -6,7 +6,7 @@
  * sim picks out the presses.
  *
  *   Drive   W/S or ↑/↓        Steer   A/D or ←/→
- *   Item    Space / Shift     Whack   Q (left) / E (right)
+ *   Item    Space / Shift     Whack   Q (left) / E (right)     Swagger  F (hold)
  *   Pause   Esc / P               Look back  C (held)
  *
  * Pad (standard mapping): RT/LT pedals, left stick steers, A item,
@@ -73,6 +73,7 @@ export class Controls {
       item: this.down('Space', 'ShiftLeft', 'ShiftRight'),
       whackLeft: this.down('KeyQ'),
       whackRight: this.down('KeyE'),
+      swagger: this.down('KeyF'),
     };
 
     const pad = this.pad();
@@ -83,7 +84,9 @@ export class Controls {
       out.throttle = Math.max(out.throttle, btn(7), btn(12) > 0.5 ? 1 : 0);
       out.brake = Math.max(out.brake, btn(6), btn(13) > 0.5 ? 1 : 0);
       if (stick !== 0) out.steer = stick;
-      out.item ||= btn(0) > 0.5 || btn(2) > 0.5;
+      out.item ||= btn(0) > 0.5;
+      // X, or both shoulders together, for swagger.
+      out.swagger ||= btn(2) > 0.5 || (btn(4) > 0.5 && btn(5) > 0.5);
       out.whackLeft ||= btn(4) > 0.5;
       out.whackRight ||= btn(5) > 0.5;
       const pause = btn(9) > 0.5;
@@ -100,6 +103,7 @@ export class Controls {
       out.item ||= t.item ?? false;
       out.whackLeft ||= t.whackLeft ?? false;
       out.whackRight ||= t.whackRight ?? false;
+      out.swagger ||= t.swagger ?? false;
     }
     out.throttle = clamp(out.throttle, 0, 1);
     out.brake = clamp(out.brake, 0, 1);

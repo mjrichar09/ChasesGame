@@ -25,7 +25,8 @@ export type Sfx =
   | 'lap'
   | 'finish'
   | 'squawk'
-  | 'flap';
+  | 'flap'
+  | 'swagger';
 
 export class Sound {
   private ctx: AudioContext | null = null;
@@ -223,6 +224,23 @@ export class Sound {
         lfo.stop(now + 0.6);
         break;
       }
+      case 'swagger':
+        // A bright rising arpeggio over a cymbal swell.
+        env(0.5 * volume, 0.01, 0.9);
+        noise('highpass', 6000, 9000, 0.7, 0.6);
+        for (const [f, t] of [[523, 0], [659, 0.06], [784, 0.12], [1046, 0.18]] as const) {
+          const o = ctx.createOscillator();
+          o.type = 'square';
+          o.frequency.value = f;
+          const g = ctx.createGain();
+          g.gain.setValueAtTime(0.0001, now + t);
+          g.gain.exponentialRampToValueAtTime(0.1 * volume, now + t + 0.01);
+          g.gain.exponentialRampToValueAtTime(0.0001, now + t + 0.35);
+          o.connect(g).connect(out);
+          o.start(now + t);
+          o.stop(now + t + 0.4);
+        }
+        break;
       case 'flap':
         env(0.25 * volume, 0.02, 0.18);
         noise('lowpass', 900, 250, 0.7, 0.2);
