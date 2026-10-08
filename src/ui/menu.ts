@@ -9,6 +9,7 @@
 import { GORILLAS, type Gorilla } from '../data/gorillas.js';
 import { TRACKS } from '../data/tracks/index.js';
 import type { Difficulty } from '../sim/driver.js';
+import { MOVES, MOVE_INFO, MOVE_NAMES } from '../sim/swagger.js';
 import { LOOKS } from '../data/tracks/looks.js';
 import { escapeHtml } from './escape.js';
 import { formatTime, ordinal } from './hud.js';
@@ -90,7 +91,7 @@ export class Menu {
         <div class="tracks">${TRACKS.map(
           (t, i) => `<button class="track" data-t="${i}"><b>${escapeHtml(t.name)}</b><span>${escapeHtml(LOOKS[t.id]?.blurb ?? '')}</span></button>`,
         ).join('')}</div>
-        <div class="who"><div class="who-name"></div><div class="who-tag"></div></div>
+        <div class="who"><div class="who-name"></div><div class="who-tag"></div><div class="who-move"><b></b><span></span></div></div>
         <div class="cards">${cards}</div>
         <div class="select-foot">
           <div class="keys">
@@ -131,6 +132,7 @@ export class Menu {
         this.swagger = b.dataset.sw === 'on';
         for (const o of this.root.querySelectorAll('.swagger-toggle button')) o.classList.toggle('on', o === b);
         this.onSwagger?.(this.swagger);
+        this.showMove();
       });
     }
     for (const b of this.root.querySelectorAll<HTMLButtonElement>('.difficulty:not(.swagger-toggle) button')) {
@@ -150,6 +152,16 @@ export class Menu {
     this.onTrack?.(i);
   }
 
+  /** The chosen gorilla's swagger move — only while swagger is on. */
+  private showMove(): void {
+    const box = this.root.querySelector<HTMLElement>('.who-move');
+    if (!box) return;
+    const move = MOVES[this.chosen]!;
+    box.style.display = this.swagger ? '' : 'none';
+    box.querySelector('b')!.textContent = `★ ${MOVE_NAMES[move]}`;
+    box.querySelector('span')!.textContent = MOVE_INFO[move];
+  }
+
   private pick(i: number): void {
     this.chosen = i;
     const g = GORILLAS[i]!;
@@ -158,6 +170,7 @@ export class Menu {
     const tag = this.root.querySelector('.who-tag');
     if (name) name.textContent = g.name;
     if (tag) tag.textContent = g.tagline;
+    this.showMove();
     this.onPreview?.(i);
   }
 

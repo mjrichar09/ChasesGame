@@ -253,6 +253,27 @@ button:focus-visible {
   text-shadow: 3px 3px 0 var(--ink), -2px -2px 0 var(--ink), 2px -2px 0 var(--ink), -2px 2px 0 var(--ink);
 }
 
+.who-move {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 6px;
+  max-width: min(92vw, 640px);
+  padding: 6px 12px;
+  border-radius: 12px;
+  background: rgba(36, 22, 10, 0.75);
+  font-size: 15px;
+  font-weight: 700;
+  text-align: left;
+}
+
+.who-move b {
+  font-family: var(--display);
+  font-weight: 400;
+  color: #ffcc33;
+  white-space: nowrap;
+}
+
 .who-tag {
   font-weight: 900;
   font-size: 17px;
@@ -940,6 +961,11 @@ button:focus-visible {
   }
   .who-tag {
     font-size: 13px;
+  }
+  .who-move {
+    font-size: 12px;
+    padding: 4px 8px;
+    margin-top: 3px;
   }
   .select .big {
     font-size: 22px;

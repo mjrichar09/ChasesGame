@@ -30,6 +30,18 @@ export const MOVE_NAMES: Record<Move, string> = {
   boulder: 'BOULDER',
 };
 
+/** One line on what each move does, for the select screen. */
+export const MOVE_INFO: Record<Move, string> = {
+  roar: 'Karts within 12 m wobble and drop their bananas as peels. Airborne karts are safe.',
+  noBrakes: '2.5 s of boost with extra grip — wall hits don’t slow you.',
+  slowClap: 'Karts up to 25 m ahead lose 30% of their pace for 2 s.',
+  feed: 'Leaves 3 banana bunches on the road behind you and refills your hands.',
+  pogo: 'A huge 4 m bounce — over gaps, peels and rivals.',
+  beat: 'Rivals within 30 m get swapped steering (left is right) for 1.5 s.',
+  tooCool: '3 s immune to everything — peels, whacks, walls, even lava. Karts that touch you get shoved aside.',
+  boulder: '2.5 s as a heavy rolling rock: bowls karts aside and flattens fallen branches.',
+};
+
 export const SWAGGER = {
   max: 100,
   // Earning.
