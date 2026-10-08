@@ -118,7 +118,7 @@ export class Stage {
       this.composer.setPixelRatio(this.quality.pixelRatio);
       this.composer.setSize(size.x, size.y);
       this.composer.addPass(new RenderPass(this.scene, camera));
-      this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.32, 0.45, 0.86);
+      this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.14, 0.35, 0.92);
       this.composer.addPass(this.bloom);
       this.composer.addPass(new ShaderPass(GRADE));
       this.composer.addPass(new OutputPass());

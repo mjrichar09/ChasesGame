@@ -30,7 +30,7 @@ function rimmed(mat: THREE.Material): THREE.Material {
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <opaque_fragment>',
       `float rimF = 1.0 - clamp(dot(normalize(normal), normalize(vViewPosition)), 0.0, 1.0);
-      outgoingLight += vec3(1.0, 0.93, 0.78) * smoothstep(0.55, 0.95, rimF) * 0.38;
+      outgoingLight += vec3(1.0, 0.93, 0.78) * smoothstep(0.62, 0.98, rimF) * 0.16;
       #include <opaque_fragment>`,
     );
   };
@@ -181,11 +181,12 @@ export function skyDressing(tint: number, sunColor: number, sunDir: THREE.Vector
     new THREE.SpriteMaterial({ map: radialTexture(), color: sunColor, transparent: true, blending: THREE.AdditiveBlending, fog: false, depthWrite: false }),
   );
   sun.position.copy(sunDir.clone().normalize().multiplyScalar(700));
-  sun.scale.set(260, 260, 1);
+  sun.scale.set(160, 160, 1);
+  (sun.material as THREE.SpriteMaterial).opacity = 0.55;
   group.add(sun);
   const core = new THREE.Sprite(new THREE.SpriteMaterial({ map: radialTexture(), color: 0xffffff, transparent: true, blending: THREE.AdditiveBlending, fog: false, depthWrite: false }));
   core.position.copy(sun.position);
-  core.scale.set(70, 70, 1);
+  core.scale.set(48, 48, 1);
   group.add(core);
   return {
     group,

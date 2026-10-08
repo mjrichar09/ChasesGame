@@ -16,11 +16,13 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { KART, PARROT, RACE, SIM } from '../data/tuning.js';
 import { type DriverInput, NEUTRAL_INPUT } from './input.js';
 import { Items } from './items.js';
-import { BARRIER_GROUPS, GROUND_GROUPS, Kart, yawQuat } from './kart.js';
+import { BARRIER_GROUPS, GROUND_GROUPS, Kart, TREE_GROUPS, yawQuat } from './kart.js';
 import { type EventState, TREE, stepEvents } from './events.js';
 import { lavaFront } from './lava.js';
 import { MOVES, type Move, type SwaggerTrack, newSwaggerTrack, shoves, stepSwagger } from './swagger.js';
-import { buildTerrain } from './terrain.js';
+import { buildTerrain, terrainHeight } from './terrain.js';
+import { type Props, type Solid, buildProps, propSolids, solidsMesh } from './props.js';
+import { LOOKS } from '../data/tracks/looks.js';
 import { type Vec3, add, cross, dot, normalize, scale, sub, v3 } from './math.js';
 import { Rng } from './rng.js';
 import { Track, type TrackDef } from './track.js';
@@ -73,6 +75,9 @@ export interface RaceOptions {
   moves?: Move[];
 }
 
+/** Trees further than this beyond the road edge, m, are not solid. */
+const TREE_REACH = 18;
+
 export class RaceSim {
   readonly track: Track;
   readonly world: RAPIER.World;
@@ -98,6 +103,10 @@ export class RaceSim {
   private roadCollider!: RAPIER.Collider;
   private ground!: RAPIER.RigidBody;
   private readonly wallColliders: RAPIER.Collider[] = [];
+  /** The trees along the course (solid: see sim/props.ts). */
+  props!: Props;
+  /** The trees that are solid (those within reach of the road). */
+  solidTrees: Solid[] = [];
   /** Where each kart sits on the grid; held there until GO. */
   private readonly gridPos: Vec3[] = [];
   /** Kart indices that respawned this step (for effects). */
@@ -161,6 +170,29 @@ export class RaceSim {
     if (terrain) {
       this.world.createCollider(
         RAPIER.ColliderDesc.trimesh(terrain.vertices, terrain.indices).setFriction(0.8).setCollisionGroups(GROUND_GROUPS),
+        ground,
+      );
+    }
+    // Trees: solid trunks and crowns, in the barrier group so wheels never
+    // ride up them — a kart (flying or not) just thumps into the tree.
+    const look = LOOKS[this.track.def.id];
+    const heightAt = (x: number, z: number) => {
+      const h = terrain ? terrainHeight(terrain, x, z) : NaN;
+      return Number.isNaN(h) ? -0.5 : h;
+    };
+    this.props = buildProps(this.track, look ?? { scenery: 0 }, heightAt);
+    // Only trees a kart can reach are solid — the deep forest stays scenery —
+    // and they go in as one mesh: hundreds of separate colliders slowed every
+    // physics step.
+    const reachable = propSolids(this.props).filter((solid) => {
+      const near = this.track.project({ x: solid.x, y: solid.kind === 'ball' ? solid.y : solid.y1, z: solid.z });
+      return Math.abs(near.lateral) - this.track.at(near.s).halfWidth <= TREE_REACH;
+    });
+    this.solidTrees = reachable;
+    if (reachable.length) {
+      const trees = solidsMesh(reachable);
+      this.world.createCollider(
+        RAPIER.ColliderDesc.trimesh(trees.vertices, trees.indices).setFriction(0.5).setRestitution(0.2).setCollisionGroups(TREE_GROUPS),
         ground,
       );
     }

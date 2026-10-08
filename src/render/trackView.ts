@@ -14,6 +14,7 @@ import { Rng } from '../sim/rng.js';
 import type { EventState } from '../sim/events.js';
 import { TREE } from '../sim/events.js';
 import { buildTerrain, terrainHeight } from '../sim/terrain.js';
+import { type Placement, type Props, type SceneryKind, buildProps } from '../sim/props.js';
 import { type VolcanoView, buildVolcanoView } from './volcanoView.js';
 import { type Sky, roadsideTufts, skyDressing } from './polish.js';
 import { BRANCH_N, type Track, WALL_HEIGHT, WALL_SOLID_HEIGHT, WALL_THICK, type Water, branchProfile } from '../sim/track.js';
@@ -149,10 +150,12 @@ export function buildTrackView(track: Track, look: TrackLook): TrackView {
     const h = terrainHeight(terrain, x, z);
     return Number.isNaN(h) ? -0.5 : h;
   };
+  // Tree placements are shared with the sim, which makes them solid.
+  const props = buildProps(track, look, heightAt);
   const barriers = look.barrier === 'vines' ? vineRails(track) : walls(track);
   group.add(barriers);
   for (const k of kickerMeshes(track)) group.add(k);
-  if (look.branches) group.add(branchesAndTrees(track));
+  if (look.branches) group.add(branchesAndTrees(track, props));
   // Mid-race events: each builds its own pieces and animates from the sim's state.
   const eventViews = (track.def.events ?? []).map((def, i) => {
     if (def.kind === 'treefall') return fallingTree(track, def);
@@ -170,8 +173,8 @@ export function buildTrackView(track: Track, look: TrackLook): TrackView {
   group.add(startArch(track, track.startS, track.def.name.toUpperCase()));
   if (!track.closed) group.add(startArch(track, track.finishS, 'SAFE ZONE', heightAt));
   if (look.vineArches) group.add(vineArches(track));
-  if (look.canopy) group.add(canopy(track));
-  if (look.scenery > 0) group.add(scenery(track, look.scenery, heightAt));
+  if (look.canopy) group.add(canopy(track, props.canopyTrunks));
+  if (look.scenery > 0) group.add(scenery(props));
   if (look.tufts) group.add(roadsideTufts(track));
   const sky = look.clouds !== undefined ? skyDressing(look.clouds, look.sunGlow ?? 0xffffff, new THREE.Vector3(60, 90, 30)) : undefined;
   if (sky) group.add(sky.group);
@@ -516,9 +519,8 @@ function vineArches(track: Track): THREE.Group {
 }
 
 /** Instanced jungle: palms, broadleaf trees, ferns, bushes, rocks, flowers. */
-function scenery(track: Track, density: number, heightAt: (x: number, z: number) => number): THREE.Group {
+function scenery(props: Props): THREE.Group {
   const g = new THREE.Group();
-  const rng = new Rng(77);
   const protos = {
     palm: proto((b, n) => {
       for (let i = 0; i < 6; i++) b.add(n, GEO.cylinder, toon(i % 2 ? 0x8a5f36 : 0x7a5230), { pos: [Math.sin(i * 0.4) * 0.3, 0.8 + i * 1.5, 0], scale: [0.32 - i * 0.025, 1.6, 0.32 - i * 0.025] });
@@ -552,35 +554,8 @@ function scenery(track: Track, density: number, heightAt: (x: number, z: number)
       b.add(n, GEO.sphereLo, toon(0xffd43a), { pos: [0, 0.9, 0], scale: 0.08 });
     }),
   };
-  const counts: Record<keyof typeof protos, number> = { palm: 260, tree: 200, fern: 500, bush: 300, rock: 120, flower: 260 };
-  // Band each kind sits in, metres beyond the road edge.
-  const bands: Record<keyof typeof protos, [number, number]> = {
-    palm: [3, 40], tree: [10, 120], fern: [1.6, 25], bush: [2, 50], rock: [2, 60], flower: [1.4, 12],
-  };
-  const m = new THREE.Matrix4();
-  const q = new THREE.Quaternion();
-  for (const kind of Object.keys(protos) as (keyof typeof protos)[]) {
-    const placements: THREE.Matrix4[] = [];
-    let tries = 0;
-    const want = Math.round(counts[kind] * density);
-    while (placements.length < want && tries++ < want * 8) {
-      const s = rng.range(0, track.length);
-      const side = rng.next() < 0.5 ? -1 : 1;
-      const k = track.at(s);
-      const [lo, hi] = bands[kind];
-      const off = k.halfWidth + WALL_THICK + lo + rng.next() ** 1.5 * (hi - lo);
-      const p = track.pointAt(s, side * off);
-      // Keep clear of every other stretch of road.
-      const near = track.project({ x: p.x, y: p.y, z: p.z });
-      if (Math.abs(near.lateral) < track.at(near.s).halfWidth + WALL_THICK + lo - 0.1) continue;
-      const scale = rng.range(0.75, 1.3);
-      const y = heightAt(p.x, p.z);
-      // Nothing grows on the bare rock and ash near a summit.
-      if (y > 70) continue;
-      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rng.range(0, Math.PI * 2));
-      m.compose(new THREE.Vector3(p.x, y, p.z), q, new THREE.Vector3(scale, scale, scale));
-      placements.push(m.clone());
-    }
+  for (const kind of Object.keys(protos) as SceneryKind[]) {
+    const placements = props.scenery[kind].map(placementMatrix);
     for (const [mat, geo] of protos[kind]) {
       const inst = new THREE.InstancedMesh(geo, mat, placements.length);
       placements.forEach((pm, i) => inst.setMatrixAt(i, pm));
@@ -589,6 +564,12 @@ function scenery(track: Track, density: number, heightAt: (x: number, z: number)
     }
   }
   return g;
+}
+
+/** A prop's transform. */
+function placementMatrix(p: Placement): THREE.Matrix4 {
+  const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), p.yaw);
+  return new THREE.Matrix4().compose(new THREE.Vector3(p.x, p.y, p.z), q, new THREE.Vector3(p.scale, p.scale * p.sy, p.scale));
 }
 
 /** A water texture: blue with drifting white ripples. */
@@ -762,7 +743,7 @@ function fords(track: Track): { mesh: THREE.Mesh; set(s0: number, s1: number): v
  * through. All instanced. The leaves cast no shadows — under a closed roof
  * that would black out the road — the light shafts do the dappling instead.
  */
-function canopy(track: Track): THREE.Group {
+function canopy(track: Track, trunks: Placement[]): THREE.Group {
   const g = new THREE.Group();
   const rng = new Rng(57);
   const m = new THREE.Matrix4();
@@ -799,19 +780,7 @@ function canopy(track: Track): THREE.Group {
   }
   b.add(node, GEO.cylinder, toon(0x3f7d2c), { pos: [0, 6, 0], scale: [1.05, 0.8, 1.05] });
   const trunk = b.geometries(node);
-  const spots: THREE.Matrix4[] = [];
-  for (let s = 0; s < track.length; s += 11) {
-    for (const side of [-1, 1]) {
-      const k = track.at(s);
-      const p = track.pointAt(s + rng.range(-3, 3), side * (k.halfWidth + rng.range(4.5, 11)));
-      const near = track.project({ x: p.x, y: p.y, z: p.z });
-      if (Math.abs(near.lateral) < track.at(near.s).halfWidth + 3.5) continue;
-      const sc = rng.range(0.8, 1.25);
-      q.setFromAxisAngle(up, rng.range(0, Math.PI * 2));
-      m.compose(new THREE.Vector3(p.x, -0.5, p.z), q, new THREE.Vector3(sc, rng.range(0.85, 1.05), sc));
-      spots.push(m.clone());
-    }
-  }
+  const spots = trunks.map(placementMatrix);
   for (const [mat, geo] of trunk) {
     const inst = new THREE.InstancedMesh(geo, mat, spots.length);
     spots.forEach((pm, j) => inst.setMatrixAt(j, pm));
@@ -898,7 +867,7 @@ function vineRails(track: Track): THREE.Group {
  * the gaps, where it meets a trunk), giant trees with leafy crowns, and a
  * rolling sea of treetops far below that hides the ground.
  */
-function branchesAndTrees(track: Track): THREE.Group {
+function branchesAndTrees(track: Track, props: Props): THREE.Group {
   const g = new THREE.Group();
   const rng = new Rng(71);
   const bark = new THREE.MeshToonMaterial({ map: barkTexture(), gradientMap: toon(0).gradientMap });
@@ -914,24 +883,7 @@ function branchesAndTrees(track: Track): THREE.Group {
   trunkGeo.translate(0, 0.5, 0);
   const crown = new THREE.IcosahedronGeometry(1, 1);
   const crownMats = [toon(0x2f7d2a), toon(0x3f9a34), toon(0x4fae3a)];
-  const spots: { x: number; z: number; top: number; r: number }[] = [];
-  for (const gap of track.gaps) {
-    for (const s of [gap.s0 - 2, gap.s1 + 2]) {
-      const k = track.at(s);
-      const side = s === gap.s0 - 2 ? 1 : -1;
-      const p = track.pointAt(s, side * (k.halfWidth + 3.2));
-      spots.push({ x: p.x, z: p.z, top: k.p.y + 16, r: 3.4 });
-    }
-  }
-  for (let s = 20; s < track.length; s += 75) {
-    if (track.inGap(s)) continue;
-    const k = track.at(s);
-    const side = k.curvature >= 0 ? 1 : -1; // outside of the bend
-    const p = track.pointAt(s, side * (k.halfWidth + rng.range(5, 9)));
-    const near = track.project({ x: p.x, y: p.y, z: p.z });
-    if (Math.abs(near.lateral) < track.at(near.s).halfWidth + 3.5) continue;
-    spots.push({ x: p.x, z: p.z, top: k.p.y + rng.range(14, 20), r: rng.range(2.6, 3.6) });
-  }
+  const spots = props.giants;
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const trunks = new THREE.InstancedMesh(trunkGeo, toon(0x5b4330), spots.length);
@@ -939,13 +891,10 @@ function branchesAndTrees(track: Track): THREE.Group {
   spots.forEach((t, i) => {
     m.compose(new THREE.Vector3(t.x, -0.5, t.z), q, new THREE.Vector3(t.r, t.top + 0.5, t.r));
     trunks.setMatrixAt(i, m);
-    for (let c = 0; c < 6; c++) {
-      const a = rng.range(0, Math.PI * 2);
-      const d = rng.range(0, 7);
-      const sc = rng.range(5, 8.5);
-      m.compose(new THREE.Vector3(t.x + Math.cos(a) * d, t.top + rng.range(-1, 3), t.z + Math.sin(a) * d), q, new THREE.Vector3(sc, sc * 0.6, sc));
-      crowns[c % 3]!.push(m.clone());
-    }
+    t.crowns.forEach((c, j) => {
+      m.compose(new THREE.Vector3(c.x, c.y, c.z), q, new THREE.Vector3(c.scale, c.scale * 0.6, c.scale));
+      crowns[j % 3]!.push(m.clone());
+    });
   });
   trunks.castShadow = true;
   g.add(trunks);

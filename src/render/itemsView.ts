@@ -14,12 +14,13 @@ import { buildSnake } from './kartView.js';
 import { buildPerchedParrot } from './parrot.js';
 import { GEO, PartBuilder, toon } from './toon.js';
 
+/** A single banana (pickups come one at a time and stack up to three). */
 function bananaBunch(): THREE.Group {
   const g = new THREE.Group();
   const b = new PartBuilder();
   const yellow = toon(0xffd93b, { emissive: 0x3a2a00 });
   const tip = toon(0x5a3a1a);
-  for (let i = 0; i < 3; i++) {
+  for (let i = 1; i < 2; i++) {
     const a = (i - 1) * 0.45;
     // A banana: three capsule segments bending along an arc.
     for (let j = 0; j < 3; j++) {
@@ -34,7 +35,7 @@ function bananaBunch(): THREE.Group {
   }
   b.add(g, GEO.cylinder, toon(0x6b8f2a), { pos: [0, 0.12, 0.38], rot: [Math.PI / 2, 0, 0], scale: [0.06, 0.15, 0.06] });
   b.build(false);
-  g.scale.setScalar(1.5);
+  g.scale.setScalar(2.2);
   return g;
 }
 

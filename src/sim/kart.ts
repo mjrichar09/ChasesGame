@@ -59,6 +59,8 @@ const groups = (member: number, filter: number) => (member << 16) | filter;
 export const GROUND_GROUPS = groups(G_GROUND, 0xffff);
 export const BARRIER_GROUPS = groups(G_BARRIER, 0xffff);
 const KART_GROUPS = groups(G_KART, 0xffff);
+/** Trees: barriers that only karts can touch (no static pairs with the ground and walls). */
+export const TREE_GROUPS = groups(G_BARRIER, G_KART);
 const SKIRT_GROUPS = groups(G_SKIRT, G_KART | G_SKIRT);
 const WHEEL_RAY_GROUPS = groups(0xffff, 0xffff & ~(G_BARRIER | G_KART | G_SKIRT));
 

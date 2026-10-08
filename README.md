@@ -33,12 +33,13 @@ npm run dev        # http://localhost:5174
 | Steer | A D / ← → | left stick | drag on the left half |
 | Banana (or snake) | Space | A | 🍌 button |
 | Whack left / right | Q / E | LB / RB | 🐍 buttons |
-| Swagger move (hold) | F | X | ★ button |
+| Swagger move (hold) | F | X | gold ★ button (pops up left of the snake buttons when the meter is full) |
 | Look back | C (hold) | Y | — |
 | Pause / quit | Esc | Start | ⏸ button |
 
 ## Items
-- **Banana bunch** (floats over a yellow ring): three bananas. Each is a 3 s
+- **Banana** (floats over a yellow ring): one per pickup — drive through more to
+  stack up to three. Each is a 3 s
   boost and drops a peel behind you. Peels stay until someone hits one.
 - **Snake** (green ring): three swings, left or right, at whoever is alongside.
 - **Parrot** (blue ring): a giant macaw carries you for 6 s. Steer and set the pace;

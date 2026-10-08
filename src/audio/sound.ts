@@ -5,6 +5,9 @@
  *   speed, so it pitches up with the kart and bogs on landings.
  * - One-shot effects are tiny WebAudio recipes: noise sweeps, chirps, thumps.
  * - Jungle ambience: a bed of filtered noise (insects) and random bird calls.
+ * - Gorilla voices: a buzzy source through two vowel formants, so hoots,
+ *   grunts and roars sound throaty rather than beepy. Bigger gorillas are
+ *   lower.
  *
  * The AudioContext starts on the first user gesture, as browsers require.
  */
@@ -28,6 +31,15 @@ export type Sfx =
   | 'flap'
   | 'swagger';
 
+/** Things a gorilla can say. */
+export type Voice = 'hoot' | 'grunt' | 'ouch' | 'roar' | 'pound';
+
+/** Vowel formants (F1, F2), Hz. */
+const OO: [number, number] = [320, 800];
+const OH: [number, number] = [500, 900];
+const UH: [number, number] = [600, 1100];
+const AH: [number, number] = [760, 1250];
+
 export class Sound {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
@@ -39,6 +51,8 @@ export class Sound {
 
   /** True while the page is hidden or unfocused: everything is silent. */
   private away = false;
+  /** When each gorilla last spoke (audio clock), so voices don't pile up. */
+  private lastVoice = new Map<number, number>();
 
   /**
    * The page went to the background (another tab, another app, the phone
@@ -250,6 +264,116 @@ export class Sound {
         for (const f of [523, 659, 784, 1046]) osc('triangle', f, f, 1.5);
         break;
     }
+  }
+
+  /**
+   * A gorilla says something. `who` identifies the speaker (one voice at a
+   * time each), `size` their build — 1 is average, bigger is deeper.
+   */
+  say(kind: Voice, who: number, size = 1, volume = 1): void {
+    const ctx = this.ctx;
+    const out = this.sfxBus;
+    if (!ctx || !out || volume <= 0) return;
+    const now = ctx.currentTime;
+    if (now - (this.lastVoice.get(who) ?? -9) < 0.5) return;
+    this.lastVoice.set(who, now);
+    const p = 150 / size; // speaking pitch, Hz
+    const v = Math.min(1, volume);
+    switch (kind) {
+      case 'hoot':
+        // "Hoo-hoo-hoo-AAH!": rising hoots, then a big open shout.
+        for (let i = 0; i < 3; i++) this.syllable(now + i * 0.17, 0.13, [p * (1.3 + i * 0.2), p * (1.5 + i * 0.2)], OO, OH, 0.28 * v, 0.05);
+        this.syllable(now + 0.53, 0.4, [p * 2.2, p * 1.5], AH, UH, 0.36 * v, 0.12);
+        break;
+      case 'grunt':
+        this.syllable(now, 0.2, [p * 0.75, p * 0.55], UH, OH, 0.4 * v, 0.25);
+        this.breath(now, 0.18, 700, 0.12 * v);
+        break;
+      case 'ouch':
+        // "Oo-WAH!": a yelp that falls away.
+        this.syllable(now, 0.48, [p * 2.4, p * 1.0], OO, AH, 0.36 * v, 0.08);
+        break;
+      case 'roar':
+        this.syllable(now, 0.85, [p * 0.6, p * 0.45], AH, UH, 0.5 * v, 0.45);
+        this.breath(now, 0.8, 500, 0.22 * v);
+        break;
+      case 'pound':
+        // Chest-beating: a quick drum roll of hollow thumps, then a grunt.
+        for (let i = 0; i < 6; i++) this.thump(now + i * 0.085, (i % 2 ? 95 : 120) / Math.sqrt(size), 0.55 * v);
+        this.syllable(now + 0.55, 0.22, [p * 0.9, p * 0.6], UH, OH, 0.35 * v, 0.2);
+        break;
+    }
+  }
+
+  /**
+   * One voiced syllable: a sawtooth (with a growl wobble of `rough`) gliding
+   * `f0[0]`→`f0[1]`, shaped by formants gliding vowel `a`→`b`.
+   */
+  private syllable(t: number, dur: number, f0: [number, number], a: [number, number], b: [number, number], peak: number, rough: number): void {
+    const ctx = this.ctx!;
+    const src = ctx.createOscillator();
+    src.type = 'sawtooth';
+    src.frequency.setValueAtTime(f0[0], t);
+    src.frequency.exponentialRampToValueAtTime(f0[1], t + dur);
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 31;
+    const depth = ctx.createGain();
+    depth.gain.value = f0[0] * rough;
+    lfo.connect(depth).connect(src.frequency);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(peak, t + Math.min(0.04, dur * 0.25));
+    g.gain.setValueAtTime(peak, t + dur * 0.6);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    g.connect(this.sfxBus!);
+    for (const [k, gain] of [[0, 1], [1, 0.5]] as const) {
+      const f = ctx.createBiquadFilter();
+      f.type = 'bandpass';
+      f.Q.value = 5;
+      f.frequency.setValueAtTime(a[k], t);
+      f.frequency.linearRampToValueAtTime(b[k], t + dur);
+      const fg = ctx.createGain();
+      fg.gain.value = gain * 2.2;
+      src.connect(f).connect(fg).connect(g);
+    }
+    src.start(t);
+    lfo.start(t);
+    src.stop(t + dur + 0.05);
+    lfo.stop(t + dur + 0.05);
+  }
+
+  /** Breathy noise under a grunt or roar. */
+  private breath(t: number, dur: number, freq: number, peak: number): void {
+    const ctx = this.ctx!;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noise;
+    const f = ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.value = freq;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(peak, t + 0.03);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f).connect(g).connect(this.sfxBus!);
+    src.start(t, Math.random());
+    src.stop(t + dur + 0.05);
+  }
+
+  /** A hollow chest thump. */
+  private thump(t: number, freq: number, peak: number): void {
+    const ctx = this.ctx!;
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(freq, t);
+    o.frequency.exponentialRampToValueAtTime(freq * 0.55, t + 0.08);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(peak, t + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+    o.connect(g).connect(this.sfxBus!);
+    o.start(t);
+    o.stop(t + 0.12);
+    this.breath(t, 0.05, 1400, peak * 0.25);
   }
 
   /** A constant insect bed. */

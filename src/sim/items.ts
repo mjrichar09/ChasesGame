@@ -2,9 +2,10 @@
  * Pickups, banana peels and snake whacks.
  *
  * - **Pickups** float over a glowing ring at fixed spots on the track. Each is
- *   either a banana bunch or a snake. Drive through one with empty hands to
+ *   a banana, a snake or a parrot. Drive through one with empty hands to
  *   take it; it comes back a few seconds later, re-rolled.
- * - **Banana bunch:** three bananas. Each one eaten is a 3 s boost and drops a
+ * - **Bananas:** one per pickup, stacking up to three (drive through more
+ *   while holding bananas). Each one eaten is a 3 s boost and drops a
  *   peel behind you. Peels have no timer — they stay until somebody hits one
  *   and spins out. (The track holds at most `maxPeels`; the oldest goes first.)
  * - **Snake:** three swings, left or right, Road Rash style. A swing hits the
@@ -51,7 +52,7 @@ export type ItemEvent =
   | { type: 'track'; kind: 'treefall' | 'flood' | 'snap'; pos: Vec3; stage?: number }
   | { type: 'swagger'; kart: number; move: Move; pos: Vec3; phase: 'windup' | 'hit'; victims?: number[] };
 
-/** A banana bunch lying loose on the road (Mama Mango's Feed the Troop): first come, first served. */
+/** A banana lying loose on the road (Mama Mango's Feed the Troop): first come, first served. */
 export interface Loose {
   id: number;
   pos: Vec3;
@@ -88,9 +89,25 @@ export class Items {
   }
 
   /** Give a kart an item directly (tests, debug). */
-  static give(kart: Kart, kind: Exclude<ItemKind, 'none'>): void {
+  static give(kart: Kart, kind: Exclude<ItemKind, 'none'>, count = 1): void {
     kart.item = kind;
-    kart.charges = kind === 'banana' ? ITEMS.bananasPerBunch : kind === 'snake' ? ITEMS.snakeSwings : 1;
+    kart.charges = kind === 'banana' ? Math.min(ITEMS.maxBananas, count) : kind === 'snake' ? ITEMS.snakeSwings : 1;
+  }
+
+  /**
+   * Can this kart take a pickup of `kind`? Empty hands take anything; a kart
+   * holding bananas can stack more bananas up to the limit; otherwise one
+   * item at a time.
+   */
+  static canTake(kart: Kart, kind: Exclude<ItemKind, 'none'>): boolean {
+    if (kart.item === 'none') return true;
+    return kind === 'banana' && kart.item === 'banana' && kart.charges < ITEMS.maxBananas;
+  }
+
+  /** Take a pickup: a fresh item, or one more banana on the stack. */
+  static take(kart: Kart, kind: Exclude<ItemKind, 'none'>): void {
+    if (kind === 'banana' && kart.item === 'banana') kart.charges = Math.min(ITEMS.maxBananas, kart.charges + 1);
+    else Items.give(kart, kind);
   }
 
   /**
@@ -121,7 +138,7 @@ export class Items {
     }
   }
 
-  /** Leave a banana bunch on the road at `at` (dropped onto the surface). */
+  /** Leave a banana on the road at `at` (dropped onto the surface). */
   addLoose(at: Vec3, ttl: number): void {
     const proj = this.track.project(at, -1);
     const k = this.track.at(proj.s);
@@ -142,22 +159,23 @@ export class Items {
   }
 
   private collect(kart: Kart, pos: Vec3): void {
-    if (kart.item !== 'none' || kart.flying) return;
+    if (kart.flying) return;
     const r2 = ITEMS.pickupRadius * ITEMS.pickupRadius;
     for (let i = 0; i < this.loose.length; i++) {
       const l = this.loose[i]!;
+      if (!Items.canTake(kart, 'banana')) break;
       const d = sub(pos, l.pos);
       if (d.x * d.x + d.y * d.y * 0.5 + d.z * d.z > r2) continue;
-      Items.give(kart, 'banana');
+      Items.take(kart, 'banana');
       this.loose.splice(i, 1);
       this.events.push({ type: 'pickup', kart: kart.index, kind: 'banana', pos: l.pos });
       return;
     }
     for (const p of this.pickups) {
-      if (!p.active) continue;
+      if (!p.active || !Items.canTake(kart, p.kind)) continue;
       const d = sub(pos, p.pos);
       if (d.x * d.x + d.y * d.y * 0.5 + d.z * d.z > r2) continue;
-      Items.give(kart, p.kind);
+      Items.take(kart, p.kind);
       p.active = false;
       p.respawn = ITEMS.pickupRespawn;
       this.events.push({ type: 'pickup', kart: kart.index, kind: p.kind, pos: p.pos });

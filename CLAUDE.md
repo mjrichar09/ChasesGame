@@ -60,6 +60,11 @@ Playwright. Deploys to GitHub Pages (`.github/workflows/pages.yml`).
   `goodMoment` for the AI). Moves come from `RaceOptions.moves` (roster order =
   `MOVES`). Overtakes only pay once a place is held 0.6 s (side-by-side karts
   swapping places every step used to farm it).
+- Trees are placed in `sim/props.ts` (seeded) and shared by render and sim. Only trees
+  within `TREE_REACH` of the road are solid, baked into ONE trimesh collider —
+  hundreds of separate Rapier colliders cost ~60% more per physics step.
+- Road widths are scaled once by `WIDTH_SCALE` in `sim/track.ts`; track data stays
+  in its original units.
 - Looks: `render/polish.ts` (rim light, ink outlines on desktop, contact shadows,
   clouds/sun, roadside tufts); `Stage.render` runs bloom + grade + vignette on
   desktop only (`Quality.post`). Headless SwiftShader is very slow with post on —

@@ -821,10 +821,11 @@ button:focus-visible {
   background: var(--banana);
 }
 
+/* Swagger: pops up just left of the snake/banana row, under the right thumb. */
 .tb-swagger {
   position: absolute;
-  right: 92px;
-  bottom: 230px;
+  right: calc(100% + 12px);
+  top: 0;
   width: 62px;
   height: 62px;
   font-size: 28px;

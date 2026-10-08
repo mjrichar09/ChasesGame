@@ -103,7 +103,8 @@ export const ITEMS = {
   boostTime: 3,
   boostForce: 1.9,
   boostTopSpeed: 1.42,
-  bananasPerBunch: 3,
+  /** Bananas come one per pickup and stack up to this many. */
+  maxBananas: 3,
 
   peelRadius: 1.25,
   /** Your own peel ignores you for this long after you drop it. */

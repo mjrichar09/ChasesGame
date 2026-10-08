@@ -87,12 +87,35 @@ describe('laps', () => {
 });
 
 describe('bananas', () => {
-  it('a bunch is three 3-second boosts, each dropping a peel', () => {
+  it('bananas come one at a time and stack up to three', () => {
+    const sim = racing(1);
+    const kart = sim.karts[0]!;
+    const p = sim.items.pickups[0]!;
+    p.kind = 'banana';
+    const grab = () => {
+      p.active = true;
+      kart.place(add(p.pos, v3(0, -0.4, 0)), kart.rotation);
+      sim.step([press({})]);
+    };
+    grab();
+    expect([kart.item, kart.charges]).toEqual(['banana', 1]);
+    grab();
+    grab();
+    expect(kart.charges).toBe(3);
+    grab();
+    expect(kart.charges).toBe(3);
+    expect(p.active).toBe(true); // a full stack leaves it for someone else
+    p.kind = 'snake';
+    grab();
+    expect(kart.item).toBe('banana'); // still one item type at a time
+  });
+
+  it('a stack of three is three 3-second boosts, each dropping a peel', () => {
     const sim = racing(1);
     putAt(sim, 0, 120, 0);
     settle(sim, 30);
     const kart = sim.karts[0]!;
-    Items.give(kart, 'banana');
+    Items.give(kart, 'banana', 3);
     for (let n = 1; n <= 3; n++) {
       sim.step([press({ item: true })]);
       expect(kart.boostTime).toBeGreaterThan(ITEMS.boostTime - 0.05);
@@ -469,6 +492,24 @@ describe('parrot', () => {
     expect(kart.position.y).toBeGreaterThan(road + 3);
     settle(sim, 120 * 3 + 10, [press({ throttle: 1 })]);
     expect(kart.flying).toBe(false);
+  });
+
+  it('cannot fly through a tree', () => {
+    const sim = airborne();
+    const kart = sim.karts[0]!;
+    settle(sim, 60, [press({ throttle: 1 })]);
+    // A palm off the side of the road; aim the flying kart straight at it.
+    const palm = sim.solidTrees.find((t) => t.kind === 'trunk' && t.y1 - t.y0 > 8)!;
+    expect(palm).toBeDefined();
+    if (palm.kind !== 'trunk') return;
+    const y = (palm.y0 + palm.y1) / 2;
+    // Moved by hand, not place(): that would cancel the flight.
+    kart.body.setTranslation({ x: palm.x - 7, y, z: palm.z }, true);
+    kart.body.setRotation(yawQuat(Math.PI / 2), true);
+    settle(sim, 90, [press({ throttle: 1 })]);
+    expect(kart.flying).toBe(true);
+    // Stopped against the bark, still on the near side.
+    expect(kart.position.x).toBeLessThan(palm.x - palm.r);
   });
 
   it('flies over peels and out of reach of snakes', () => {

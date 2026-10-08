@@ -197,6 +197,7 @@ export class Track {
   readonly finishS: number;
 
   constructor(def: TrackDef) {
+    def = widen(def);
     this.def = def;
     this.closed = !def.open;
     const { samples, pointS } = buildSamples(def);
@@ -587,6 +588,25 @@ function catmull(p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3, t: number): Vec3 {
   const b1 = lerpP(a1, a2, t0, t2);
   const b2 = lerpP(a2, a3, t1, t3);
   return lerpP(b1, b2, t1, t2);
+}
+
+/**
+ * Every road is laid out this much wider than its data says: widths, ramp
+ * widths and positions across the road, and pickup lanes all scale together.
+ */
+export const WIDTH_SCALE = 1.25;
+
+function widen(def: TrackDef): TrackDef {
+  const k = WIDTH_SCALE;
+  return {
+    ...def,
+    width: def.width * k,
+    points: def.points.map((p) => (p.width === undefined ? p : { ...p, width: p.width * k })),
+    features: def.features.map((f) =>
+      f.kind === 'kicker' ? { ...f, lateral: (f.lateral ?? 0) * k, width: f.width === undefined ? undefined : f.width * k } : f,
+    ),
+    pickups: def.pickups.map((r) => ({ ...r, lanes: r.lanes.map((l) => l * k) })),
+  };
 }
 
 function buildSamples(def: TrackDef): { samples: Sample[]; pointS: number[] } {

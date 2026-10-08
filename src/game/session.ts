@@ -17,7 +17,7 @@ import { GORILLAS, type Gorilla } from '../data/gorillas.js';
 import { TRACKS } from '../data/tracks/index.js';
 import { RACE } from '../data/tuning.js';
 import { LOOKS } from '../data/tracks/looks.js';
-import { Sound } from '../audio/sound.js';
+import { Sound, type Voice } from '../audio/sound.js';
 import { ChaseCam } from '../render/chaseCam.js';
 import { Fx } from '../render/fx.js';
 import { ItemsView } from '../render/itemsView.js';
@@ -222,6 +222,7 @@ export class Game {
     this.preview.object.position.set(0, 1.4, 0);
     this.podium.add(this.preview.object);
     this.preview.celebrate(2.6, false);
+    this.sound.say('hoot', -1, GORILLAS[i]!.size, 0.8);
     this.encore = 5;
   }
 
@@ -298,6 +299,7 @@ export class Game {
     this.hud.setTrack(sim);
     this.hud.show(true);
     this.touch.show(TouchControls.wanted());
+    this.hud.touchMode = TouchControls.wanted();
     this.menu.hide();
     this.podium.visible = false;
     this.cam.cut();
@@ -350,10 +352,12 @@ export class Game {
       this.playerFinishedAt = this.time;
       this.sound.stopEngine();
       this.hud.shout('TOASTED!', 'bad', 3);
+      this.voice('ouch', this.player, 1);
     } else if (playerDone && this.playerFinishedAt === null) {
       this.playerFinishedAt = this.time;
       this.sound.play('finish');
       const place = sim.position(this.player);
+      this.voice(place <= 3 ? 'hoot' : 'grunt', this.player, 1);
       this.hud.shout(place === 1 ? 'YOU WIN!' : `FINISHED ${place}${['st', 'nd', 'rd'][place - 1] ?? 'th'}`, 'finish', 3);
     }
     if (this.playerFinishedAt !== null && (sim.allFinished || this.time - this.playerFinishedAt > 10)) {
@@ -427,6 +431,11 @@ export class Game {
     this.stage.scene.add(group);
   }
 
+  /** Kart `i`'s gorilla says something, in their own voice. */
+  private voice(kind: Voice, i: number, vol: number): void {
+    if (vol > 0) this.sound.say(kind, i, this.roster[i]!.size, vol);
+  }
+
   private nearPlayer(pos: { x: number; y: number; z: number }): number {
     const p = this.sim!.karts[this.player]!.position;
     const d = Math.hypot(pos.x - p.x, pos.y - p.y, pos.z - p.z);
@@ -456,7 +465,9 @@ export class Game {
         case 'peelHit':
           this.fx.emit({ pos: v(e.pos).setY(e.pos.y + 0.8), count: 22, color: [0xffe14d, 0xffffff], speed: [3, 7], size: [0.3, 0.6], life: [0.4, 0.9], gravity: 6 });
           if (vol > 0) this.sound.play('peelHit', vol);
+          this.voice('ouch', e.kart, vol);
           if (e.owner !== e.kart) {
+            this.voice('hoot', e.owner, e.owner === this.player ? 1 : this.nearPlayer(sim.karts[e.owner]!.position) * 0.8);
             this.views[e.owner]?.celebrate(1.5, true);
             if (e.owner === this.player) this.hud.shout('GOTCHA!', 'good', 0.9);
           }
@@ -474,6 +485,7 @@ export class Game {
           this.fx.emit({ pos: v(e.pos).setY(e.pos.y + 0.5), count: 30, color: [0xff6a1a, 0xffd23a, 0xff3a0a], speed: [3, 9], dir: new THREE.Vector3(0, 1, 0), spread: 0.7, size: [0.5, 1.1], life: [0.5, 1.2], gravity: 6 });
           this.fx.emit({ pos: v(e.pos).setY(e.pos.y + 1), count: 16, color: [0x3a3330, 0x55504c], speed: [1, 3], dir: new THREE.Vector3(0, 1, 0), spread: 0.4, size: [1.5, 2.6], life: [1.5, 2.5], drag: 0.6 });
           if (vol > 0) this.sound.play('splash', vol);
+          this.voice('ouch', e.kart, vol);
           if (e.kart !== this.player && vol > 0.2) this.hud.shout(`${this.roster[e.kart]!.name.toUpperCase()} TOASTED`, 'bad', 1.2);
           break;
         case 'swagger':
@@ -484,6 +496,7 @@ export class Game {
           this.fx.emit({ pos: v(e.pos), count: Math.round(6 + e.strength * 14), color: [0x8a5a33, 0xd2b07a], speed: [2, 6], size: [0.25, 0.6], life: [0.3, 0.7], gravity: 8 });
           if (vol > 0) this.sound.play('land', vol * (0.5 + e.strength * 0.5));
           if (e.kart === this.player) this.cam.kick(0.25 + e.strength * 0.35);
+          if (e.strength > 0.6) this.voice('grunt', e.kart, vol * 0.8);
           break;
         case 'swing':
           if (vol > 0) this.sound.play('swing', vol);
@@ -492,6 +505,8 @@ export class Game {
           this.fx.emit({ pos: v(e.pos).setY(e.pos.y + 1.2), count: 18, color: [0xffffff, 0xffe14d], speed: [4, 9], size: [0.3, 0.55], life: [0.3, 0.6] });
           if (vol > 0 || e.victim === this.player) this.sound.play('whack', Math.max(vol, e.victim === this.player ? 1 : 0));
           this.views[e.kart]?.celebrate(1.5, true);
+          this.voice('grunt', e.kart, vol);
+          this.voice('ouch', e.victim, e.victim === this.player ? 1 : vol);
           if (e.kart === this.player) this.hud.shout('WHACK!', 'good', 0.8);
           if (e.victim === this.player) {
             this.hud.shout('OOF!', 'bad', 0.8);
@@ -511,6 +526,7 @@ export class Game {
       }
       if (i === this.player) {
         this.cam.cut();
+        if (pr.lastRespawn === 'fell') this.voice('ouch', i, 1);
         if (pr.lastRespawn === 'fell') this.hud.shout(wet ? 'SPLASH!' : LOOKS[sim.track.def.id]?.branches ? 'TIMBERRR!' : 'WHOOPS!', 'bad');
       }
     }
@@ -539,6 +555,7 @@ export class Game {
     if (e.phase === 'windup') {
       this.views[e.kart]?.celebrate(1.4, true);
       if (vol > 0) this.sound.play('swagger', Math.max(0.4, vol));
+      this.voice('pound', e.kart, vol);
       if (mine) this.hud.shout(`${MOVE_NAMES[e.move]}!`, 'good', 1.3);
       else if (vol > 0.3) this.hud.shout(`${who.name.split(' ')[0]!.toUpperCase()}: ${MOVE_NAMES[e.move]}!`, 'bad', 1.1);
       this.fx.emit({ pos: at.clone().setY(at.y + 2), count: 24, color: [0xffcc33, 0xfff6dd], speed: [3, 7], size: [0.3, 0.6], life: [0.4, 0.8], gravity: 3 });
@@ -549,6 +566,7 @@ export class Game {
       case 'roar':
         this.ring(at, 0xffcc33, 12);
         if (vol > 0) this.sound.play('land', vol);
+        this.sound.say('roar', 1000 + e.kart, who.size, vol);
         break;
       case 'beat':
         this.ring(at, 0x9b5cf6, 30);
