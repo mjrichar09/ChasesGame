@@ -12,6 +12,7 @@ import type { Difficulty } from '../sim/driver.js';
 import { MOVES, MOVE_INFO, MOVE_NAMES } from '../sim/swagger.js';
 import { LOOKS } from '../data/tracks/looks.js';
 import { escapeHtml } from './escape.js';
+import { homeScreenHint } from './fullscreen.js';
 import { formatTime, ordinal } from './hud.js';
 
 const hex = (c: number) => `#${c.toString(16).padStart(6, '0')}`;
@@ -22,7 +23,14 @@ export interface ResultRow {
   player: boolean;
   /** Caught by the lava. */
   dnf?: boolean;
+  /** A human's name, online. */
+  name?: string;
+  /** Online, still racing (no time yet). */
+  racing?: boolean;
 }
+
+/** Which buttons the results show: solo, an online host, or an online player. */
+export type ResultsMode = 'solo' | 'host' | 'client';
 
 export class Menu {
   readonly root: HTMLDivElement;
@@ -38,6 +46,7 @@ export class Menu {
   onQuit: (() => void) | null = null;
   onMute: (() => boolean) | null = null;
   onGesture: (() => void) | null = null;
+  onOnline: (() => void) | null = null;
   private chosen = 0;
   private track = 0;
 
@@ -63,16 +72,23 @@ export class Menu {
   }
 
   title(): void {
+    const hint = homeScreenHint();
     this.root.dataset.screen = 'title';
     this.root.innerHTML = `
       <div class="panel title">
         <h1 class="logo"><span>JUNGLE</span><span>JALOPIES</span></h1>
         <p class="sub">Eight gorillas. Junk karts. Too many bananas.</p>
         <button class="big go">PLAY</button>
+        <button class="big online">PLAY ONLINE</button>
+        ${hint ? `<p class="hint">${escapeHtml(hint)}</p>` : ''}
       </div>`;
     this.root.querySelector('.go')!.addEventListener('click', () => {
       this.onGesture?.();
       this.select();
+    });
+    this.root.querySelector('.online')!.addEventListener('click', () => {
+      this.onGesture?.();
+      this.onOnline?.();
     });
   }
 
@@ -174,18 +190,20 @@ export class Menu {
     this.onPreview?.(i);
   }
 
-  pause(muted: boolean): void {
+  /** The pause menu. Online the race can't stop: the AI drives while it's open. */
+  pause(muted: boolean, online = false): void {
     this.root.dataset.screen = 'pause';
     this.root.innerHTML = `
       <div class="panel pause">
-        <h2>PAUSED</h2>
-        <button class="big resume">RESUME</button>
-        <button class="restart">Restart race</button>
+        <h2>${online ? 'MENU' : 'PAUSED'}</h2>
+        ${online ? '<p class="note">The race goes on — the AI is driving for you.</p>' : ''}
+        <button class="big resume">${online ? 'BACK TO THE RACE' : 'RESUME'}</button>
+        ${online ? '' : '<button class="restart">Restart race</button>'}
         <button class="mute">${muted ? 'Sound: off' : 'Sound: on'}</button>
-        <button class="quit">Quit race</button>
+        <button class="quit">${online ? 'Leave race' : 'Quit race'}</button>
       </div>`;
     this.root.querySelector('.resume')!.addEventListener('click', () => this.onResume?.());
-    this.root.querySelector('.restart')!.addEventListener('click', () => this.onRestart?.());
+    this.root.querySelector('.restart')?.addEventListener('click', () => this.onRestart?.());
     this.root.querySelector('.quit')!.addEventListener('click', () => this.onQuit?.());
     const mute = this.root.querySelector<HTMLButtonElement>('.mute')!;
     mute.addEventListener('click', () => {
@@ -194,7 +212,7 @@ export class Menu {
     });
   }
 
-  results(rows: ResultRow[]): void {
+  results(rows: ResultRow[], mode: ResultsMode = 'solo'): void {
     this.root.dataset.screen = 'results';
     const me = rows.findIndex((r) => r.player) + 1;
     const lines = rows
@@ -202,8 +220,8 @@ export class Menu {
         (r, i) => `
         <tr class="${r.player ? 'me' : ''}">
           <td class="p">${ordinal(i + 1)}</td>
-          <td><span class="swatch" style="background:${hex(r.gorilla.accent)}"></span>${escapeHtml(r.gorilla.name)}</td>
-          <td class="t">${r.dnf ? '🔥 TOASTED' : r.time === null ? '—' : formatTime(r.time)}</td>
+          <td><span class="swatch" style="background:${hex(r.gorilla.accent)}"></span>${escapeHtml(r.name ?? r.gorilla.name)}</td>
+          <td class="t">${r.dnf ? '🔥 TOASTED' : r.time === null ? (r.racing ? '🏁 racing…' : '—') : formatTime(r.time)}</td>
         </tr>`,
       )
       .join('');
@@ -213,12 +231,15 @@ export class Menu {
       <div class="panel results">
         <h2>${cheer}</h2>
         <table>${lines}</table>
-        <div class="row">
-          <button class="big again">RACE AGAIN</button>
-          <button class="choose">Choose gorilla</button>
-        </div>
+        <div class="row">${
+          mode === 'solo'
+            ? '<button class="big again">RACE AGAIN</button><button class="choose">Choose gorilla</button>'
+            : mode === 'host'
+              ? '<button class="big again">BACK TO ROOM</button><button class="choose">Close room</button>'
+              : '<p class="note">The host will take everyone back to the room.</p><button class="choose">Leave room</button>'
+        }</div>
       </div>`;
-    this.root.querySelector('.again')!.addEventListener('click', () => this.onRestart?.());
+    this.root.querySelector('.again')?.addEventListener('click', () => this.onRestart?.());
     this.root.querySelector('.choose')!.addEventListener('click', () => this.onQuit?.());
   }
 }

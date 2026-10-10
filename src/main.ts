@@ -3,6 +3,7 @@
  */
 import { Game } from './game/session.js';
 import { initPhysics } from './sim/race.js';
+import { autoFullscreen } from './ui/fullscreen.js';
 import './ui/style.css';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#view')!;
@@ -11,4 +12,5 @@ const loading = document.querySelector<HTMLElement>('#loading');
 
 await initPhysics();
 new Game(canvas, overlay);
+autoFullscreen();
 loading?.remove();

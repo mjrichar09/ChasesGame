@@ -73,7 +73,21 @@ export interface RaceOptions {
   swagger?: boolean;
   /** Each kart's signature move, by kart index (default: the roster's, in order). */
   moves?: Move[];
+  /**
+   * Online play (see net/). 'host' runs the official race, with other players'
+   * karts as proxies that follow their reports. 'client' only drives its own
+   * kart (`own`): everything shared — items, hits, laps, events, the lava —
+   * arrives from the host. Default 'solo'.
+   */
+  role?: Role;
+  /** The client's own kart. */
+  own?: number;
 }
+
+export type Role = 'solo' | 'host' | 'client';
+
+/** How far behind the lava front, m, a kart driven on another phone may be before it counts. */
+const PROXY_LAVA_GRACE = 5;
 
 /** Trees further than this beyond the road edge, m, are not solid. */
 const TREE_REACH = 18;
@@ -111,16 +125,28 @@ export class RaceSim {
   private readonly gridPos: Vec3[] = [];
   /** Kart indices that respawned this step (for effects). */
   respawned: number[] = [];
+  readonly role: Role;
+  /** The kart this device drives in a client race (-1 otherwise). */
+  readonly own: number;
+  /** Finishing order from the host, which a client race uses instead of its own. */
+  order: number[] | null = null;
+  /** Respawns and wall bonks that proxies' phones reported, for the next step. */
+  private reportedRespawns: number[] = [];
+  private reportedBonks: { kart: number; strength: number }[] = [];
 
   constructor(def: TrackDef, opts: RaceOptions = {}) {
     this.track = new Track(def);
     // A point-to-point track is one "lap", start line to finish line.
     this.laps = this.track.closed ? (opts.laps ?? RACE.laps) : 1;
     this.rng = new Rng(opts.seed ?? 1);
+    this.role = opts.role ?? 'solo';
+    this.own = this.role === 'client' ? (opts.own ?? 0) : -1;
     this.world = new RAPIER.World({ x: 0, y: -SIM.gravity, z: 0 });
     this.world.timestep = this.dt;
     this.buildTrack();
     this.items = new Items(this.track, this.rng);
+    this.items.authority = this.role !== 'client';
+    this.items.own = this.own;
     this.events = (def.events ?? []).map((d) => ({ def: d, phase: 'idle' as const, t: 0, stage: 0 }));
     this.swaggerOn = opts.swagger ?? true;
 
@@ -231,8 +257,8 @@ export class RaceSim {
     return Math.max(0, best);
   }
 
-  /** Make an event's change to the track real. */
-  private applyEvent(e: EventState): void {
+  /** Make an event's change to the track real (a client is told when by the host). */
+  applyEvent(e: EventState): void {
     const d = e.def;
     const track = this.track;
     if (d.kind === 'treefall') {
@@ -310,6 +336,7 @@ export class RaceSim {
 
   /** Kart indices ordered first to last. */
   standings(): number[] {
+    if (this.order) return [...this.order];
     const order = this.karts.map((k) => k.index);
     return order.sort((a, b) => {
       const fa = this.progress[a]!.finishTime;
@@ -334,14 +361,16 @@ export class RaceSim {
   step(inputs: readonly DriverInput[]): void {
     const dt = this.dt;
     this.clock += dt;
-    this.respawned = [];
+    this.respawned = this.reportedRespawns;
+    this.reportedRespawns = [];
     if (this.phase === 'countdown' && this.clock >= RACE.countdown) this.phase = 'racing';
     const live = this.phase !== 'countdown';
     const held = this.karts.map((_, i) =>
       live && !this.progress[i]!.dnf ? (inputs[i] ?? NEUTRAL_INPUT) : NEUTRAL_INPUT,
     );
 
-    if (live) for (const e of stepEvents(this.events, this.leaderLaps, dt)) this.applyEvent(e);
+    const client = this.role === 'client';
+    if (live && !client) for (const e of stepEvents(this.events, this.leaderLaps, dt)) this.applyEvent(e);
     const flood = this.events.find((e) => e.def.kind === 'flood');
     const stage = flood?.stage ?? 0;
     for (const kart of this.karts) {
@@ -358,14 +387,23 @@ export class RaceSim {
       if (kart.flying) kart.flyTargetY = Math.max(kart.flyBaseY, this.track.at(pr.s).p.y) + PARROT.altitude;
     }
     const eventsFrom = this.items.events.length;
+    for (const b of this.reportedBonks) {
+      this.items.events.push({ type: 'bonk', kart: b.kart, pos: this.karts[b.kart]!.position, strength: b.strength });
+    }
+    this.reportedBonks = [];
     this.items.step(dt, this.karts, held, live);
-    for (const kart of this.karts) if (!this.progress[kart.index]!.dnf) kart.step(dt, held[kart.index]!);
+    for (const kart of this.karts) {
+      if (kart.proxy) kart.stepProxy(dt, held[kart.index]!);
+      else if (!this.progress[kart.index]!.dnf) kart.step(dt, held[kart.index]!);
+    }
+    this.bumpProxies();
     this.world.step();
     // Until GO every kart is held on its grid spot: free to settle on its
     // springs, but not to roll down a banked or sloping grid (Lava Run's grid
     // is downhill, and karts used to coast metres before the lights).
     if (this.phase === 'countdown') {
       for (const kart of this.karts) {
+        if (kart.proxy) continue;
         const g = this.gridPos[kart.index]!;
         const t = kart.body.translation();
         const v = kart.body.linvel();
@@ -375,10 +413,46 @@ export class RaceSim {
         kart.body.setAngvel({ x: w.x, y: 0, z: w.z }, true);
       }
     }
-    for (const kart of this.karts) if (!this.progress[kart.index]!.dnf) this.track1(kart, held[kart.index]!);
+    for (const kart of this.karts) {
+      // A client follows everyone else's progress from the host.
+      if (client && kart.index !== this.own) continue;
+      if (!this.progress[kart.index]!.dnf) this.track1(kart, held[kart.index]!);
+    }
     if (live) {
       stepSwagger(this, held, eventsFrom);
       shoves(this);
+    }
+  }
+
+  /**
+   * Karts driven here against proxies (karts driven on other phones): a soft
+   * push apart, like a bump between two karts of equal mass — this kart takes
+   * its half of the closing speed and is eased out of any overlap.
+   */
+  private bumpProxies(): void {
+    const reach = 2 * KART.half.x + 0.5;
+    for (const k of this.karts) {
+      if (k.proxy || k.out || k.flying) continue;
+      const pk = k.position;
+      for (const o of this.karts) {
+        if (!o.proxy || o.out || o.flying) continue;
+        const rel = sub(pk, o.position);
+        const d = Math.hypot(rel.x, rel.z);
+        if (d >= reach + 0.6 || d < 1e-3 || Math.abs(rel.y) > 1.2) continue;
+        // Narrow side to side, longer nose to tail.
+        const f = o.forward;
+        const along = Math.abs(rel.x * f.x + rel.z * f.z) / d;
+        const touch = reach + along * (2 * KART.half.z - 2 * KART.half.x) * 0.5;
+        if (d >= touch) continue;
+        const n = v3(rel.x / d, 0, rel.z / d);
+        const vk = k.velocity;
+        const vo = o.velocity;
+        const closing = (vk.x - vo.x) * n.x + (vk.z - vo.z) * n.z;
+        let j = 0;
+        if (closing < 0) j += -closing * 0.5 * 1.3;
+        j += Math.min(4, (touch - d) * 6) * this.dt * 20;
+        k.body.applyImpulse(scale(n, j * KART.mass), true);
+      }
     }
   }
 
@@ -408,8 +482,10 @@ export class RaceSim {
     pr.lateral = p.lateral;
     pr.grace = Math.max(0, pr.grace - this.dt);
 
+    // Laps, the finish and the lava are the host's to call.
+    const official = this.role !== 'client';
     const lap = Math.max(0, Math.floor(pr.dist / this.lapLength));
-    if (lap > pr.lap && pr.finishTime === null) {
+    if (official && lap > pr.lap && pr.finishTime === null) {
       const prevTotal = pr.lapTimes.reduce((a, b) => a + b, 0);
       pr.lapTimes.push(this.raceTime - prevTotal);
       pr.lap = lap;
@@ -420,10 +496,14 @@ export class RaceSim {
     }
 
     // Caught by the lava — unless the parrot has you up out of it.
-    if (pr.finishTime === null && !kart.flying && p.s < this.lavaS) {
+    // A proxy is seen here a moment late, so its phone gets that moment back.
+    const lavaGrace = kart.proxy ? PROXY_LAVA_GRACE : 0;
+    if (official && pr.finishTime === null && !kart.flying && p.s < this.lavaS - lavaGrace) {
       this.toast(kart);
       return;
     }
+    // A proxy's bonks and respawns happen on the phone driving it.
+    if (kart.proxy) return;
 
     const sample = this.track.at(p.s);
     this.bonk(kart, pr, sample, p.lateral);
@@ -506,14 +586,29 @@ export class RaceSim {
     this.respawned.push(kart.index);
   }
 
+  /** A proxy's phone put it back on the road (it has already moved there). */
+  reportRespawn(kart: number): void {
+    this.reportedRespawns.push(kart);
+    this.progress[kart]!.respawns++;
+  }
+
+  /** A proxy's phone says it hit the logs. */
+  reportBonk(kart: number, strength: number): void {
+    this.reportedBonks.push({ kart, strength });
+  }
+
   /** True once every kart has finished. */
   get allFinished(): boolean {
     return this.progress.every((p) => p.finishTime !== null || p.dnf);
   }
 
-  /** The lava takes a kart: it stops where it is, out of the race. */
-  private toast(kart: Kart): void {
-    if (kart.coolTime > 0) return; // Too cool for lava.
+  /**
+   * The lava takes a kart: it stops where it is, out of the race. In a client
+   * race only the host can say so (`ruled`).
+   */
+  toast(kart: Kart, ruled = false): void {
+    if (this.role === 'client' && !ruled) return;
+    if (kart.coolTime > 0 && !ruled) return; // Too cool for lava.
     const pr = this.progress[kart.index]!;
     pr.dnf = true;
     kart.out = true;

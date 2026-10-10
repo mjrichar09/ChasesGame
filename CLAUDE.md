@@ -9,13 +9,15 @@ TypeScript, three.js (render), Rapier (physics, wasm inlined), Vite, Vitest,
 Playwright. Deploys to GitHub Pages (`.github/workflows/pages.yml`).
 
 ## Layering (do not break)
-`data → sim → game | render | audio → ui → main`
+`data → sim → net → game | render | audio → ui → main`
 
 - `src/sim/` is the whole simulation: **no three.js, no DOM, no Math.random**
   (use `sim/rng.ts`). A race is a pure function of seed + inputs — that is what
   the tests rely on and what online multiplayer will rely on later.
 - `src/render/` only reads sim state. `src/game/session.ts` turns sim events
   into effects, sound and HUD callouts.
+- `src/net/` is online play (docs/multiplayer.md): pure TS like sim, except
+  `net/peer.ts` (WebRTC via PeerJS, browser only).
 - All kart, item and race numbers live in `src/data/tuning.ts`.
 - Inputs are *held* state (`DriverInput`); karts detect button presses
   (rising edges) inside the sim. Never pass one-shot "pressed" flags.
@@ -35,7 +37,12 @@ Playwright. Deploys to GitHub Pages (`.github/workflows/pages.yml`).
 - With `npm run dev` running: `npm run shoot`, `npm run shoot:mobile`,
   `npm run racecheck` (full 1-lap autopilot race to the results screen).
   Screenshots land in `shots/`.
-- URL switches for dev: `?laps=1`, `?autopilot`, `?give=parrot|banana|snake`.
+- URL switches for dev: `?laps=1`, `?autopilot`, `?give=parrot|banana|snake`,
+  `?room=1234` (invite link), `?peer=localhost:9000` (local signalling server).
+- Online: `npm run netsim -- --players=7 --profile=4g` — headless host + phones over a
+  simulated network (results agreement, host-copy error, bandwidth). Run after any sim
+  or net change. `npm run peer` + `npm run dev`, then `npx tsx tools/netcheck.ts`:
+  two Chromium pages race over real WebRTC (`CHROMIUM=path` for a non-Playwright browser).
 
 ## Things that bit us (keep them fixed)
 - Wheel rays ignore barriers and other karts (collision groups in `sim/kart.ts`):
@@ -56,6 +63,9 @@ Playwright. Deploys to GitHub Pages (`.github/workflows/pages.yml`).
   `sim.events` — it has its own `Track` instance, so never read mutable track
   state from the render copy during a race.
 - Leaving the page (hidden/blur/pagehide) suspends audio and pauses the race.
+- Phones go fullscreen on a tap (`ui/fullscreen.ts`: the Fullscreen API needs a
+  gesture; touchend/click count, pointerdown doesn't). iPhone Safari can't: the manifest
+  (`public/manifest.webmanifest`) and apple meta tags make a home-screen launch fullscreen.
 - Swagger lives in `sim/swagger.ts` (meter, earnings/costs, hold → wind-up → move,
   `goodMoment` for the AI). Moves come from `RaceOptions.moves` (roster order =
   `MOVES`). Overtakes only pay once a place is held 0.6 s (side-by-side karts
@@ -77,6 +87,16 @@ Playwright. Deploys to GitHub Pages (`.github/workflows/pages.yml`).
   During a parrot flight (+2.5 s) it searches the whole lap, accepting forward
   jumps up to `PARROT.maxSkip` of a lap per flight, so flying shortcuts count
   but can't be chained into a lap.
+
+- Online, one player's phone hosts (`net/host.ts`, `RaceOptions.role`): each phone
+  drives its *own* kart's physics; the host owns items, hits, laps, events, lava and
+  AI. Other phones' karts are **proxies** (`Kart.setProxy`): kinematic, **no
+  collider** — a kinematic body jerked by network updates crushed karts against
+  walls and launched them at 300 m/s. Karts get a soft push off proxies instead
+  (`RaceSim.bumpProxies`). Solo races never create proxies.
+- An online race never pauses: the pause menu and a backgrounded phone hand the kart to
+  the AI (host side after `AWAY_AFTER`; the client takes it back via the epoch).
+- Bump `PROTOCOL` in `net/protocol.ts` when messages or race-building change.
 
 ## Conventions
 - Every source file opens with a comment saying why it exists.
