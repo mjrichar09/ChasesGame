@@ -1,226 +1,115 @@
-# Online multiplayer — plan
+# Online multiplayer
 
-Status: **proposal, nothing built yet.** This document records the decisions and the order of work so
-each step can be reviewed and tested before the next one starts.
+Up to 8 people race online, phones first and desktop as well; AI gorillas fill the empty karts.
+One player's phone **hosts** the room, and everyone else joins with its **4-digit code** (or an
+invite link). Nothing to deploy beyond the static site.
 
-Goal: 2–8 people race each other online, phones first and desktop as well, on any of the
-existing tracks. Empty seats get AI gorillas. It has to feel as good as single player on a
-4G phone with a 100–200 ms round trip, and it must not break the solo game.
+## How it plays
 
----
+1. **Title → PLAY ONLINE.** Enter a name (remembered), then **HOST A ROOM** or type a code and **JOIN**.
+2. **The room** shows the code with an **Invite** button (the phone's share sheet, or copy link),
+   who's in, and the gorilla cards. Each gorilla can be picked by one player only; taken cards show
+   who has them. The host picks the track, laps, rival difficulty and swagger on/off, then presses
+   **START!**
+3. **The race.** The host's phone waits until every phone has loaded the track, then the
+   countdown starts for everyone at once. Players' names float over their karts and replace the
+   gorilla names in the HUD and results.
+4. **Results** fill in live as others finish. The host's **BACK TO ROOM** takes everyone back for a
+   rematch.
 
-## 1. The key decision: who is in charge of what
+The ⏸ button doesn't stop an online race: it opens a menu while the AI drives your kart. Leaving the
+app does the same. After about 1.5 s of silence the host's AI takes your kart, and when you come
+back you pick it up from wherever the AI left it. The screen is kept awake during races (Screen Wake
+Lock). If the **host** leaves the app, the race freezes for everyone, with a "Waiting for the
+host…" banner, until the host comes back. A host phone that runs slow (busy or hot) slows
+everyone's race down with it: a player's clock never runs more than 0.25 s past the host's newest
+snapshot. Before this cap, players raced ahead of a slow host, decided it had stalled and stopped
+reporting, and then got their karts handed to the AI.
 
-### Options considered
+## Who decides what
 
-| Model | How it works | Why not (for this game) |
+Lockstep or rollback netcode needs every phone to compute bit-identical physics. iOS Safari and
+Chrome don't guarantee that for `Math.sin`/`atan2`, and re-simulating 8 karts of Rapier on a phone is
+too expensive. So instead:
+
+| Thing | Decided by | How a phone hides the delay |
 |---|---|---|
-| **Lockstep / rollback (GGPO)** | Every device runs the whole race from the same inputs. Rollback re-runs the last few frames when late inputs arrive. | Needs **bit-identical** results on every device. The sim calls `Math.sin/cos/atan2/hypot` (45 call sites), and iOS Safari (JavaScriptCore) and Chrome (V8) don't promise identical results for those. Rapier's standard `-compat` build doesn't promise cross-platform determinism either. On top of that, rollback re-runs 8 karts of Rapier physics several times per frame, and phones can't afford that at 120 Hz. One desync ends the race. |
-| **Full server authority + prediction with rewind** (the Rocket League model) | The server simulates everything. Each client predicts its own kart, then rewinds and replays its inputs when a snapshot disagrees. | A Rapier world can't be rewound cheaply: `takeSnapshot()` also serialises the road and tree trimeshes. Long-travel, bouncy suspension diverges quickly, so on 4G the player would feel constant corrections. |
-| **P2P, one player's phone hosts** | Same as below, but the host is a player's device, connected over WebRTC. | No server bill, but the race dies when the host locks their phone (iOS suspends the tab). Cellular NAT needs TURN servers anyway. The host's phone also does twice the work. Worth keeping as a later option for LAN / couch play. |
-| **Server-authoritative race, client-authoritative own kart** ✅ | Each phone drives its own kart physics locally. The server runs the official race (items, hits, laps, events, AI, lava) and checks that each kart's reported motion is plausible. | **Recommended.** This is the usual model for kart racers. |
+| Your kart's motion, respawns, wall bonks | **Your phone** (physics runs locally) | none needed: steering never waits on the network |
+| Banana boost, parrot take-off, snake swing, your own swagger move | Your phone starts it on the press; the host mirrors it from your buttons | instant |
+| Your item, its charges, your swagger meter | **Host** | ignored until the host has seen your last press (the report ack) |
+| Hitting a peel | Your phone notices it and claims the peel; the host checks it's still there and you're near it | instant spin |
+| Pickups and item rolls | **Host** | item shows up one round trip later |
+| Whacks, Roar, Slow Clap, Drop the Beat, boulder/Too Cool shoves | **Host**, using its positions | the hit arrives as an event; timers merge by max |
+| Laps, places, the finish, lava DNFs | **Host** | — |
+| Jungle events (tree fall, flood, branch snap) | **Host**, sent as event phases | each phone rebuilds the change locally |
+| AI gorillas | **Host** | other phones see them like any remote kart |
 
-### Recommended model
+Other karts are drawn **120 ms in the past**, blended between the two host snapshots around that
+moment. They are *proxies*: kinematic bodies with **no solid collider**. Karts driven on this phone
+get a soft, capped push away from them (`RaceSim.bumpProxies`). An immovable body jerked along by
+network updates would crush and launch whatever it pressed against: a kart wedged against a proxy
+used to reach 300 m/s in `netsim`. The host sees each player slightly late, so a remote kart gets
+5 m of grace from the lava front.
 
-- **Your own kart moves on your device, immediately.** Driving never waits on the network, so
-  4G latency never touches steering, drifting, jumps or suspension.
-- **Everything shared is decided once, on the server:** item rolls, peel and snake hits, swagger
-  moves, mid-race track events, laps and positions, the finish, lava DNFs, and the AI fill-ins.
-  The server runs the existing headless `RaceSim` in Node, the same code `npm test` and
-  `npm run telemetry` already run.
-- **Other karts are shown about 100 ms in the past**, interpolated between server snapshots, so
-  they move smoothly. On your device they are solid kinematic bodies, so you can still bump them.
-- **The server checks reported motion** against speed caps, a teleport limit, progress continuity
-  and the kart's status (it can't boost without a banana). A report that fails is clamped; repeated
-  failures put the kart back on the server's version.
+## Code map
 
-Determinism still matters. It keeps the tests repeatable, gives free replays (seed + input log), and
-means server and clients agree on track layout, props and item spots without sending them.
-Nothing depends on two different JS engines agreeing to the last bit.
+- `src/net/protocol.ts`: messages, constants (snapshot 20 Hz, reports 60 Hz, interp delay, away
+  timeout), `makeRaceConfig` (grid: humans in random slots, AI in the rest) and `buildRace` (every
+  phone builds the identical race from the config).
+- `src/net/state.ts`: binary snapshot and report packing (`bin.ts`). Peels, pickups and loose
+  bananas are only sent when they change.
+- `src/net/host.ts`: the room and the official race (`NetHost.step`), with proxies following
+  reports, AI takeover and peel claims.
+- `src/net/client.ts`: a player's side (`NetClient.step`): clock sync, interpolation, applying
+  snapshots, reports, and taking the kart back after an AI spell (the epoch).
+- `src/net/link.ts`: the `Link` interface, and `memoryPair`, a simulated network with latency,
+  jitter and loss on a manual clock.
+- `src/net/peer.ts`: WebRTC links via PeerJS (browser only). The host registers
+  `jungle-jalopies-<code>` on the free public PeerJS server; players connect with two data channels,
+  reliable JSON and unordered binary. PeerJS's public TURN servers relay when two phones on mobile
+  data can't connect directly. `?peer=host:port` uses another signalling server.
+- `src/net/harness.ts`: a whole online race in one process, behind the tests and `netsim`.
+- Sim hooks: `RaceOptions.role` (`solo` | `host` | `client`), `Kart.setProxy/pose/stepProxy`,
+  `Items.authority`/`claimPeel`, `RaceSim.reportRespawn/reportBonk/applyEvent/toast(…, ruled)`.
+  Solo races are unchanged.
+- UI: `src/ui/online.ts` (online and room screens); `src/game/session.ts` (modes, waiting banner,
+  connection badge, live results, wake lock).
 
-### Who decides what
+## Checking it
 
-| Thing | Authority | Latency hiding on the client |
-|---|---|---|
-| Own kart position/velocity | **Client** (server validates) | none needed |
-| Status effects on own kart (spin, wobble, slow, swapped steering) | **Server** decides; client applies on receipt | Spins start ~RTT/2 late, from where you actually are |
-| Item pickups | **Server** | Client predicts the pickup ring vanishing and starts the **item roulette** at once. The server's roll arrives during the roulette (MK-style latency hiding) |
-| Eating a banana (boost) | Client predicts while the server-mirrored inventory says there are charges; server confirms | Instant boost, rolled back if refused |
-| Hitting a peel | **Client** reports "hit peel #id" (it sees exactly where it drove); server checks the distance | Instant spin |
-| Snake whacks, swagger moves on others | **Server**, using its own positions | Swing animation plays at once; the hit callout arrives with the server event |
-| Laps, positions, finish, DNF | **Server** | HUD shows predicted lap ticks; position comes from the server |
-| Track events (tree fall, flood, snap) | **Server**, by leader lap | Already timed with warnings, so no change needed |
-| Parrot flight | Client flies, server validates the shortcut via the existing `PARROT.maxSkip` rule | none needed |
+- `npm test` includes `tests/net.test.ts`:
+  - the wire format round-trips;
+  - room seating works;
+  - a host and three phones on simulated 4G finish a lap and agree on every finish time;
+  - a phone that goes quiet is driven by the AI and then takes its kart back;
+  - a host running at half speed slows everyone down without anyone being taken over.
+- `npm run netsim -- --players=7 --profile=4g [--track=N --laps=N --away=N --why]`: a headless online
+  race. It reports the finish order as the host and each phone see it, how far the host's copy of
+  each player's kart trails the real one, bandwidth, respawns and AI takeovers. Profiles:
+  `lan`, `wifi`, `4g`, `bad`.
+- `npm run peer` (local signalling server) + `npm run dev`, then `npx tsx tools/netcheck.ts`: two
+  phone-sized Chromium pages race over real WebRTC to the results and back to the room. Screenshots
+  are saved as `shots/net-*.png`.
+- By hand: open the dev server on two devices on the same Wi-Fi (`http://<your-ip>:5174/`).
 
----
+Measured with `netsim` (Vine Valley, 1 lap):
 
-## 2. Architecture
-
-### New layering
-
-```
-data → sim → net → game | render | audio → ui → main
-                 ↘ server/   (Node: data + sim + net only)
-```
-
-- `src/net/` is pure TS with **no DOM, no three.js, no Node APIs**, shared by browser and server:
-  - `protocol.ts`: message types and a `PROTOCOL_VERSION`. A client and server that disagree on the
-    version refuse to connect and tell the player to reload.
-  - `codec.ts`: compact binary encoding using `DataView`, with quantised floats and a smallest-three
-    quaternion.
-  - `snapshot.ts`: takes a snapshot from a `RaceSim` and applies one to it, plus the interpolation
-    buffer.
-  - `clock.ts`: server-time estimate (NTP-style pings, median filter) and the adaptive
-    interpolation delay.
-  - `transport.ts`: a `Transport` interface with a WebSocket implementation and an **in-memory
-    implementation that adds latency, jitter and loss** for tests and tools.
-- `server/` is the Node entry point: an HTTP health check, a WebSocket endpoint, rooms, and a
-  120 Hz fixed loop per racing room. It runs the same `RaceSim`, plus `AiDriver` for empty or
-  away seats.
-- `src/game/` gets a `RaceSource` interface. Today's code becomes `LocalRace`, and a new `NetRace`
-  feeds views, HUD and effects through the same interface. `session.ts` stops assuming
-  `sim.step()` + `this.player` and asks the source for the race state, the local seat, and the
-  events to play out.
-
-### Sim changes (small, behaviour-preserving for solo)
-
-1. `Kart.mode: 'driven' | 'proxy'`. A proxy is a kinematic body moved from snapshots: other
-   players' karts on a client, and the server's copy of a human kart, which follows that kart's
-   reports. Collision groups stay the same, so skirts and barrier rules still apply.
-2. Status effects move into one `applyEffect(kart, effect)` function, called by `Items`,
-   `swagger.ts` and the client when a server event arrives.
-3. `RaceSim.step` gets a hook so it can skip `kart.step` for proxies, and so the server's
-   `track1` (laps, respawns, lava) runs on the reported positions.
-4. Respawns stay client-side for your own kart, because `fell`, `offTrack` and `stuck` depend on
-   your own physics. The server checks that the spot is a real `safeS`.
-5. Kart state serialisation (`net/snapshot.ts`), tested as a round trip. The determinism test
-   still passes untouched.
-
-### Messages (binary over a WebSocket)
-
-| Direction | Message | Rate | Size |
+| | 3 players, 4G (60 ± 40 ms, 1% loss) | 7 players, Wi-Fi | 7 players, bad (150 ± 100 ms, 5% loss) |
 |---|---|---|---|
-| C→S | `input`: held `DriverInput` + own kart state (pos, quat, linvel, angvel, flags) + client tick + last snapshot ack | 30 Hz (every 4th sim step) | ~60 B |
-| C→S | `claim`: peel hit / pickup / item use / respawn | on event | ~16 B |
-| S→C | `snapshot`: server tick, 8 × kart (pos, quat, vel, status bits, item, swagger, progress), new/removed peels & loose bananas, lava | 30 Hz | ~350 B (≈ 10 KB/s) |
-| S→C | `events`: the existing `ItemEvent`s (pickup, whack, swagger, track, toasted…) with ticks | on event | small |
-| both | `ping`/`pong`, lobby messages (JSON is fine here) | 1 Hz / rare | — |
+| Host's copy of a player kart behind the real one (median / 95%) | 1.4 m / 2.3 m | 0.4 m / 0.6 m | 2.6 m / 5.2 m |
+| Host upload | 15 KB/s per player | 15 KB/s per player (~105 KB/s total) | same |
+| Player upload | 4.8 KB/s | 4.8 KB/s | 4.8 KB/s |
+| All phones agree on the results | yes | yes | yes |
 
-Downstream traffic is about 10 KB/s per player, roughly **4–5 MB for a 7-minute race**, which is
-fine on mobile data.
+## Known limits / next steps
 
-**Transport:** start with WebSocket. It works everywhere, including iOS Safari and captive
-networks, and it is simple. Because inputs are *held state*, a late packet is replaced by the next
-one, so TCP's head-of-line stalls only cost smoothness. The adaptive interpolation delay soaks most
-of that up. The `Transport` interface leaves room for WebTransport datagrams later, once every
-target browser supports them.
-
-### Server capacity
-
-Measured headless (Node 22, this container): **~1.5 ms per 120 Hz step for a full 8-kart race
-including AI**, which is ~18% of one core per room. A small 1-vCPU instance comfortably runs
-3–4 simultaneous races. Proxy karts are cheaper than AI karts, so human-heavy rooms cost less.
-
----
-
-## 3. Player flow (mobile first)
-
-1. **Title → "Play online"** next to the solo race.
-2. **Create room** gives a 4-letter code (no look-alike letters), a **Share** button (Web Share API
-   on phones; copy-link on desktop), and a QR code on desktop so a phone on the sofa can scan in.
-   A link like `…/?room=KBZQ` opens straight into the room.
-3. **Room screen:** the players with their gorillas (each gorilla once, first come first served),
-   a nickname (stored locally, 12 chars, filtered), and a ready toggle. The host picks the track,
-   laps, rival difficulty for AI fill-ins and swagger on/off; everyone else sees the settings.
-   Start needs everyone ready, or the host forces it after a timeout.
-4. **Race:** the server-timed countdown begins at the same moment for everyone (start time sent in
-   server time). Humans are placed on the grid randomly, or by the last race's results on a rematch.
-5. **Finish:** your result shows at once, then a live leaderboard as others finish. Spectate the
-   remaining racers with the chase cam. The results screen offers **Rematch** (same room) and
-   **Leave**.
-
-### Phone-specific handling
-
-- **Backgrounding doesn't pause an online race.** The current behaviour (pause on
-  hidden/blur/pagehide) stays for solo. Online, the kart is marked *away* and an AI driver
-  (`AiDriver`, mid level) takes over after 1 s with no input. When you come back, the server's
-  state is applied and you drive again. The HUD shows a small "🤖 was driving" note.
-- **Reconnect:** a seat token is kept in `sessionStorage`. Switching between Wi-Fi and 4G, or a
-  dropped socket, reconnects with exponential backoff, and the player keeps their seat for the
-  whole race.
-- **Screen Wake Lock** while racing online, so the phone doesn't dim mid-race.
-- **Network indicator:** a small signal-bars icon from RTT and jitter, plus a "connection lost —
-  reconnecting" banner. Never a frozen screen: remote karts extrapolate for up to 250 ms, then hold.
-- **Touch UI** is unchanged. The room screen is designed for portrait and landscape with big tap
-  targets. The ⏸ button opens a menu (mute, leave) that doesn't stop the race.
-- **Battery/CPU:** a client runs physics for one driven kart and seven kinematic proxies, and no
-  AI. That is less work than solo today.
-
----
-
-## 4. Milestones
-
-Each step ends with `npm test` green, plus that step's own checks. Solo play must keep working at
-every step.
-
-**M0 — Groundwork in the sim (no networking yet)**
-- `applyEffect`, `Kart.mode = 'proxy'`, snapshot take/apply, the `RaceSource` split in
-  `session.ts`.
-- Tests: snapshot round trip is exact; a race where every kart is replayed as a proxy from a
-  recorded run produces the same laps and finish order; solo determinism test unchanged.
-
-**M1 — Server + protocol, headless**
-- `server/` with rooms and a racing loop. `src/net/` codec, clock, interpolation and in-memory
-  transport.
-- `npm run netsim -- --players=4 --profile=4g`: a headless server plus N headless bot clients
-  (autopilot) over the lossy in-memory transport. It reports position error, corrections, rejected
-  claims, hit timing and bandwidth.
-- Tests: codec fuzz/round trip; a full 1-lap race with 4 bot clients and 4 AI finishes with the
-  same standings the server reports to every client; the validation rejects a teleporting client.
-
-**M2 — Playable in the browser (desktop first, local server)**
-- `NetRace`: own-kart driving, remote kart interpolation, server events into the existing effects,
-  sound and HUD.
-- Bare-bones lobby (create/join by code, start).
-- `npm run dev:server` + `npm run dev`. `npm run netcheck`: Playwright with two browser contexts
-  racing 1 lap to the results screen (a sibling of `racecheck`).
-
-**M3 — Lobby, mobile polish, resilience**
-- Full room screen, share links, QR, gorilla picking, host settings, rematch.
-- Away → AI takeover, reconnect, wake lock, network indicator, spectating.
-- `npm run shoot:mobile` covers the room screen; `netsim` adds a "phone locks for 5 s" scenario.
-
-**M4 — Deploy**
-- `server/Dockerfile` + host config. The Pages build gets the server URL from
-  `VITE_MP_SERVER` (when it is unset, the online button is hidden, so forks keep working
-  offline).
-- CI: the GitHub workflow also builds the server and runs the net tests.
-- Basic abuse limits: origin check, message rate and size caps, room cap per IP, idle room
-  expiry, no accounts and no PII stored.
-
-**Later (not in this pass):** public quick-match, LAN/P2P host mode, ghost/replay sharing
-(free with seed + inputs), voice reactions/emotes, ranked play.
-
----
-
-## 5. Risks and how we'll know
-
-| Risk | Mitigation / measurement |
-|---|---|
-| Bumping another human feels asymmetric (each side sees the other a bit in the past) | Expected in this model. `netsim` measures contact mismatch; soften proxy impulses if needed |
-| Status hits feel late on bad connections | Animate swings and wind-ups locally at once; measure event latency in `netsim` |
-| Cheating (client authority) | Plausibility checks on the server, server-owned items and hits. Fine for friends' rooms; ranked play would need more |
-| iOS kills the socket in the background | AI takeover + seat token + reconnect, covered by a `netsim` scenario |
-| Server cost | ~18% of a core per room, measured; rooms expire when idle |
-| `session.ts` (900 lines) refactor regresses solo | M0 is refactor-only, with `racecheck`/`shoot` before and after |
-
----
-
-## 6. Open questions for the owner
-
-1. **Hosting:** a small always-on Node host (e.g. Fly.io, Render, Railway or a VPS, a few
-   dollars a month) is recommended. The alternatives are zero-cost P2P with a phone as host (less
-   reliable on mobile) or Cloudflare Durable Objects (cheap, but a poor fit for a 120 Hz physics
-   loop).
-2. **Who plays:** friends via room codes only (recommended for v1), or public matchmaking too?
-3. **Room size:** up to 8 humans (AI fills the rest), or cap humans lower at first?
+- **The host is a phone.** If the host's app is backgrounded, everyone waits. If the host leaves,
+  the room ends. Moving the same `NetHost` to a small Node server later is straightforward: it
+  already runs headless, and `Link` would just need a WebSocket version.
+- **The public PeerJS server** is free and shared: no uptime promise and no TURN capacity
+  guarantee. Running our own (`peer` package, or any PeerJS-compatible server) needs only a
+  `?peer=` / config change.
+- No mid-race joining. A late player waits in the room for the next race.
+- Item pickups take a round trip to show; a "roulette" animation in the item slot would hide it.
+- Codes are 4 digits on a shared namespace (`jungle-jalopies-NNNN`), so a room code can only be
+  guessed by someone who also has this game.

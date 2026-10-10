@@ -43,7 +43,7 @@ export type ItemEvent =
   | { type: 'pickup'; kart: number; kind: Exclude<ItemKind, 'none'>; pos: Vec3 }
   | { type: 'boost'; kart: number; pos: Vec3 }
   | { type: 'peelDrop'; kart: number; pos: Vec3 }
-  | { type: 'peelHit'; kart: number; owner: number; pos: Vec3 }
+  | { type: 'peelHit'; kart: number; owner: number; pos: Vec3; peel?: number }
   | { type: 'swing'; kart: number; side: -1 | 1; pos: Vec3 }
   | { type: 'whack'; kart: number; victim: number; pos: Vec3 }
   | { type: 'bonk'; kart: number; pos: Vec3; strength: number }
@@ -70,6 +70,15 @@ export class Items {
   private nextPeel = 1;
   private readonly rng: Rng;
   private readonly track: Track;
+  /**
+   * False in an online client race: pickups, peels and hits on others come
+   * from the host. The client still uses its own kart's items at once (a
+   * banana boosts on the press, not a round trip later) and notices its own
+   * peel hits — see net/.
+   */
+  authority = true;
+  /** The client's own kart. */
+  own = -1;
 
   constructor(track: Track, rng: Rng) {
     this.rng = rng;
@@ -115,6 +124,13 @@ export class Items {
    * `prevInput` still holds last step's, so call this *before* the karts step.
    */
   step(dt: number, karts: readonly Kart[], inputs: readonly DriverInput[], canUse: boolean): void {
+    if (!this.authority) {
+      const kart = karts[this.own];
+      if (!kart || kart.out) return;
+      if (canUse) this.use(kart, inputs[kart.index]!, karts);
+      this.peelHits(kart, kart.position);
+      return;
+    }
     for (const p of this.pickups) {
       if (p.active) continue;
       p.respawn -= dt;
@@ -134,8 +150,25 @@ export class Items {
       const pos = kart.position;
       this.collect(kart, pos);
       if (canUse) this.use(kart, inputs[kart.index]!, karts);
-      this.peelHits(kart, pos);
+      // A proxy's phone reports its own peel hits (see `claimPeel`).
+      if (!kart.proxy) this.peelHits(kart, pos);
     }
+  }
+
+  /**
+   * A player's phone says its kart hit peel `id`. True (and the peel is
+   * gone) if that peel is still there and the kart is plausibly on it.
+   */
+  claimPeel(kart: Kart, id: number): boolean {
+    const i = this.peels.findIndex((p) => p.id === id);
+    if (i < 0 || kart.out) return false;
+    const peel = this.peels[i]!;
+    const d = sub(kart.position, peel.pos);
+    if (d.x * d.x + d.z * d.z > (ITEMS.peelRadius + 6) ** 2) return false;
+    this.peels.splice(i, 1);
+    this.spinOut(kart);
+    this.events.push({ type: 'peelHit', kart: kart.index, owner: peel.owner, pos: peel.pos, peel: id });
+    return true;
   }
 
   /** Leave a banana on the road at `at` (dropped onto the surface). */
@@ -229,7 +262,9 @@ export class Items {
       const surface = this.track.kickerHeight(proj.s, proj.lateral) - this.track.surfaceDrop(proj.lateral, k.halfWidth);
       at = sub(at, scale(k.n, proj.height - surface));
     }
-    this.peels.push({ id: this.nextPeel++, pos: at, yaw: Math.atan2(f.x, f.z), owner: kart.index, age: 0 });
+    // A client's own peel is a guess (negative id) until the host's arrives.
+    const id = this.authority ? this.nextPeel++ : -this.nextPeel++;
+    this.peels.push({ id, pos: at, yaw: Math.atan2(f.x, f.z), owner: kart.index, age: 0 });
     if (this.peels.length > ITEMS.maxPeels) this.peels.shift();
     this.events.push({ type: 'peelDrop', kart: kart.index, pos: at });
   }
@@ -264,6 +299,7 @@ export class Items {
       kart.charges = 0;
     }
     this.events.push({ type: 'swing', kart: kart.index, side, pos: kart.position });
+    if (!this.authority) return;
     const hit = this.target(kart, side, karts);
     if (!hit) return;
     const victim = hit.kart;
@@ -280,11 +316,12 @@ export class Items {
     for (let i = 0; i < this.peels.length; i++) {
       const peel = this.peels[i]!;
       if (peel.owner === kart.index && peel.age < ITEMS.peelGrace) continue;
+      if (peel.id < 0) continue;
       const d = sub(pos, peel.pos);
       if (Math.abs(d.y) > 1.6 || d.x * d.x + d.z * d.z > r2) continue;
       this.peels.splice(i, 1);
       this.spinOut(kart);
-      this.events.push({ type: 'peelHit', kart: kart.index, owner: peel.owner, pos: peel.pos });
+      this.events.push({ type: 'peelHit', kart: kart.index, owner: peel.owner, pos: peel.pos, peel: peel.id });
       return;
     }
   }

@@ -120,9 +120,11 @@ export function earn(sim: RaceSim, kart: Kart, amount: number): void {
 export function stepSwagger(sim: RaceSim, held: readonly DriverInput[], eventsFrom: number): void {
   if (!sim.swaggerOn || sim.phase !== 'racing') return;
   const dt = sim.dt;
+  // Online, a client only fires its own moves; the host keeps every meter.
+  const client = sim.role === 'client';
   // Hits and slips this step.
   const evs = sim.items.events;
-  for (let i = eventsFrom; i < evs.length; i++) {
+  for (let i = client ? evs.length : eventsFrom; i < evs.length; i++) {
     const e = evs[i]!;
     if (e.type === 'whack') {
       earn(sim, sim.karts[e.kart]!, SWAGGER.whack);
@@ -138,10 +140,38 @@ export function stepSwagger(sim: RaceSim, held: readonly DriverInput[], eventsFr
       earn(sim, sim.karts[e.kart]!, -SWAGGER.bonk);
     }
   }
-  for (const i of sim.respawned) earn(sim, sim.karts[i]!, -SWAGGER.respawn);
+  if (!client) for (const i of sim.respawned) earn(sim, sim.karts[i]!, -SWAGGER.respawn);
 
   for (const kart of sim.karts) {
-    if (kart.out) continue;
+    if (kart.out || (client && kart.index !== sim.own)) continue;
+    const input = held[kart.index]!;
+    if (!client) earnings(sim, kart, input);
+
+    // Firing: hold the button, then a wind-up, then the move.
+    if (kart.moveWindup > 0) {
+      kart.moveWindup -= dt;
+      if (kart.moveWindup <= 1e-9) {
+        kart.moveWindup = 0;
+        fire(sim, kart);
+      }
+      continue;
+    }
+    const can = kart.swagger >= SWAGGER.max && !kart.spinning && !kart.flying;
+    kart.swaggerHold = can && input.swagger ? kart.swaggerHold + dt : 0;
+    if (kart.swaggerHold >= SWAGGER.hold) {
+      kart.swaggerHold = 0;
+      kart.swagger = 0;
+      kart.moveWindup = SWAGGER.windup;
+      kart.moveT = 0;
+      sim.items.events.push({ type: 'swagger', kart: kart.index, move: kart.move, pos: kart.position, phase: 'windup' });
+    }
+  }
+}
+
+/** What one kart earned (or lost) by its driving this step. */
+function earnings(sim: RaceSim, kart: Kart, input: DriverInput): void {
+  const dt = sim.dt;
+  {
     const st = sim.swaggerTrack[kart.index]!;
     const pr = sim.progress[kart.index]!;
     st.sinceHit += dt;
@@ -172,7 +202,6 @@ export function stepSwagger(sim: RaceSim, held: readonly DriverInput[], eventsFr
       }
     }
     // Late braking: hard on the brakes, fast, with a real corner just ahead.
-    const input = held[kart.index]!;
     if (input.brake > 0.8 && speed > 20 && st.brakeCool === 0 && kart.grounded > 0) {
       let k = 0;
       for (let d = 6; d <= 26; d += 4) k = Math.max(k, Math.abs(sim.track.at(pr.s + d).curvature));
@@ -211,27 +240,11 @@ export function stepSwagger(sim: RaceSim, held: readonly DriverInput[], eventsFr
         st.brakeCool = 1;
       }
     }
-
-    // Firing: hold the button, then a wind-up, then the move.
-    if (kart.moveWindup > 0) {
-      kart.moveWindup -= dt;
-      if (kart.moveWindup <= 1e-9) {
-        kart.moveWindup = 0;
-        fire(sim, kart);
-      }
-      continue;
-    }
-    const can = kart.swagger >= SWAGGER.max && !kart.spinning && !kart.flying;
-    kart.swaggerHold = can && input.swagger ? kart.swaggerHold + dt : 0;
-    if (kart.swaggerHold >= SWAGGER.hold) {
-      kart.swaggerHold = 0;
-      kart.swagger = 0;
-      kart.moveWindup = SWAGGER.windup;
-      kart.moveT = 0;
-      sim.items.events.push({ type: 'swagger', kart: kart.index, move: kart.move, pos: kart.position, phase: 'windup' });
-    }
   }
 }
+
+/** Moves that only change the kart making them. */
+const SELF_MOVES: readonly Move[] = ['noBrakes', 'pogo', 'tooCool', 'boulder'];
 
 /** The move hits. */
 function fire(sim: RaceSim, kart: Kart): void {
@@ -241,7 +254,10 @@ function fire(sim: RaceSim, kart: Kart): void {
   const near = (r: number) => others.filter((o) => length(sub(o.position, pos)) < r);
   const victims: number[] = [];
   kart.moveT = 0;
-  switch (kart.move) {
+  // A client plays its own move at once, but what it does to others (and to
+  // the items on the road) is the host's to decide.
+  const self = sim.role === 'client';
+  switch (self && !SELF_MOVES.includes(kart.move) ? null : kart.move) {
     case 'roar':
       // Everyone close and on the ground wobbles, and drops any bananas as peels.
       for (const o of near(S.roarRadius)) {
@@ -312,7 +328,7 @@ export function shoves(sim: RaceSim): void {
     if (kart.out || (kart.coolTime <= 0 && kart.boulderTime <= 0)) continue;
     const pos = kart.position;
     for (const o of sim.karts) {
-      if (o === kart || o.out || o.immune) continue;
+      if (o === kart || o.out || o.immune || o.proxy) continue;
       const rel = sub(o.position, pos);
       const d = Math.hypot(rel.x, rel.z);
       if (d > SWAGGER.shoveRadius || d < 0.01) continue;

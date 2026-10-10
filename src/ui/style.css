@@ -415,6 +415,259 @@ button:focus-visible {
   justify-content: center;
 }
 
+/* -------------------------------------------------------------- online */
+
+.menu[data-screen='online'] {
+  background: radial-gradient(ellipse at center, rgba(10, 30, 12, 0.25), rgba(10, 30, 12, 0.7));
+}
+
+.panel.online {
+  background: rgba(36, 22, 10, 0.9);
+  border: 4px solid var(--ink);
+  border-radius: 24px;
+  padding: 22px 22px;
+  box-shadow: 0 10px 0 rgba(0, 0, 0, 0.35);
+  max-height: calc(100% - 24px);
+  overflow-y: auto;
+}
+
+.panel.online button.big {
+  width: 100%;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  font-weight: 900;
+}
+
+.panel input {
+  font: 24px var(--display);
+  color: var(--ink);
+  background: var(--cream);
+  border: 3px solid var(--ink);
+  border-radius: 12px;
+  padding: 8px 12px;
+  width: 100%;
+  pointer-events: auto;
+  -webkit-user-select: text;
+  user-select: text;
+  touch-action: manipulation;
+}
+
+.join-row {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+}
+
+.join-row .code {
+  flex: 1;
+  min-width: 0;
+  font-size: 34px;
+  letter-spacing: 0.3em;
+  text-align: center;
+}
+
+.or,
+.hint,
+.note {
+  font-weight: 700;
+  font-size: 14px;
+  opacity: 0.85;
+  text-align: center;
+  margin: 0;
+}
+
+.err {
+  margin: 0;
+  color: #ffb4a8;
+  font-weight: 900;
+  text-align: center;
+}
+
+.panel h2.busy {
+  font-size: 30px;
+}
+
+.spinner {
+  font-size: 44px;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.room-top {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.room-code {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--display);
+}
+
+.room-code span {
+  font-size: 22px;
+  color: #fff;
+  text-shadow: 2px 2px 0 var(--ink), -1px -1px 0 var(--ink), 1px -1px 0 var(--ink), -1px 1px 0 var(--ink);
+}
+
+.room-code b {
+  font-weight: 400;
+  text-shadow: 3px 3px 0 var(--ink), -2px -2px 0 var(--ink), 2px -2px 0 var(--ink), -2px 2px 0 var(--ink);
+  font-size: 46px;
+  letter-spacing: 0.12em;
+  color: var(--banana);
+}
+
+.room-code .share {
+  font-size: 16px;
+  padding: 6px 12px;
+}
+
+.room-players {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 4px;
+  border-radius: 99px;
+  background: rgba(36, 22, 10, 0.8);
+  font-weight: 900;
+  font-size: 15px;
+}
+
+.chip i {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--ink);
+}
+
+.chip.me {
+  background: var(--banana);
+  color: var(--ink);
+  text-shadow: none;
+}
+
+.chip.ai {
+  padding-left: 10px;
+  opacity: 0.8;
+}
+
+.room .tracks {
+  margin-top: 0;
+  flex-wrap: wrap;
+}
+
+.room .track {
+  font-size: 15px;
+  padding: 5px 10px;
+}
+
+.card {
+  position: relative;
+}
+
+.card.taken {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.card .by {
+  position: absolute;
+  left: 50%;
+  bottom: -9px;
+  transform: translateX(-50%);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--ink);
+  color: var(--cream);
+  font: 900 11px var(--body);
+  text-shadow: none;
+}
+
+.room-foot {
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.room-foot .swagger-toggle {
+  margin-left: 0;
+}
+
+button:disabled {
+  cursor: default;
+}
+
+.difficulty button:disabled:not(.on),
+.track:disabled:not(.on) {
+  opacity: 0.55;
+}
+
+.waiting {
+  font-weight: 900;
+  font-size: 17px;
+  background: rgba(36, 22, 10, 0.75);
+  border-radius: 12px;
+  padding: 10px 14px;
+}
+
+.net-badge {
+  position: absolute;
+  left: 50%;
+  bottom: calc(10px + var(--safe-b));
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+  font-weight: 900;
+  font-size: 13px;
+  text-shadow: 0 2px 0 var(--ink);
+  white-space: nowrap;
+}
+
+.net-badge span {
+  background: rgba(36, 22, 10, 0.6);
+  border-radius: 99px;
+  padding: 2px 10px;
+}
+
+.net-badge b {
+  font: 400 26px var(--display);
+  color: var(--banana);
+  background: rgba(36, 22, 10, 0.8);
+  border-radius: 14px;
+  padding: 8px 18px;
+}
+
+.net-badge.waiting {
+  bottom: 42%;
+}
+
 /* ----------------------------------------------------------------- hud */
 
 .hud {
@@ -1029,5 +1282,37 @@ button:focus-visible {
   }
   .select-foot {
     justify-content: center;
+  }
+  .room-code b {
+    font-size: 32px;
+  }
+  .room-code span {
+    font-size: 16px;
+  }
+  .chip {
+    font-size: 12px;
+  }
+  .room-foot {
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .room-foot .difficulty button {
+    font-size: 13px;
+    padding: 3px 7px;
+  }
+  .room-foot .difficulty span {
+    font-size: 12px;
+  }
+  .room-foot > button:not(.big) {
+    font-size: 15px;
+    padding: 6px 12px;
+  }
+  .waiting {
+    font-size: 13px;
+    padding: 6px 10px;
+  }
+  .card .by {
+    font-size: 9px;
+    bottom: -7px;
   }
 }

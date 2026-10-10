@@ -35,9 +35,19 @@ import { Track } from '../sim/track.js';
 import { Controls } from '../ui/controls.js';
 import { Hud } from '../ui/hud.js';
 import { Menu, type ResultRow } from '../ui/menu.js';
+import { OnlineMenu } from '../ui/online.js';
 import { TouchControls } from '../ui/touch.js';
+import { NetClient } from '../net/client.js';
+import { NetHost } from '../net/host.js';
+import { hostRoom, joinRoom } from '../net/peer.js';
+import { cleanName } from '../net/protocol.js';
 
 type State = 'menu' | 'race' | 'paused' | 'results';
+/** Solo against the AI, hosting a room on this phone, or racing in someone else's. */
+type Mode = 'solo' | 'host' | 'client';
+
+/** Seconds, for the netcode's clocks. */
+const nowSecs = () => performance.now() / 1000;
 
 /** Grid slot the player starts from (0 = pole). Mid-pack: something to chase, something to hold off. */
 const PLAYER_SLOT = 4;
@@ -54,6 +64,8 @@ const AUTOPILOT = params.has('autopilot');
 const GIVE = params.get('give') as 'banana' | 'snake' | 'parrot' | 'swagger' | null;
 /** `?eventlap=1`: mid-race track events fire on that lap instead (testing). */
 const EVENT_LAP = Number(params.get('eventlap')) || 0;
+/** `?room=1234`: an invite link — open the online screen with the code filled in. */
+const INVITE = /^\d{4}$/.test(params.get('room') ?? '') ? params.get('room')! : '';
 
 export class Game {
   private readonly stage: Stage;
@@ -96,6 +108,21 @@ export class Game {
   /** Expanding rings for area moves (Roar, Drop the Beat, Slow Clap). */
   private rings: { mesh: THREE.Mesh; t: number; life: number; size: number }[] = [];
 
+  // Online.
+  private mode: Mode = 'solo';
+  private readonly online: OnlineMenu;
+  private host: NetHost | null = null;
+  private client: NetClient | null = null;
+  /** The open WebRTC room (host) or connection (player), to close on leaving. */
+  private peer: { close(): void } | null = null;
+  private roomCode = '';
+  /** Players' names by grid slot ('' for AI). */
+  private names: string[] = [];
+  private readonly netBadge: HTMLDivElement;
+  private resultsKey = '';
+  private resultsTimer = 0;
+  private wakeLock: { release(): Promise<void> } | null = null;
+
   // Menu preview.
   private preview: KartView | null = null;
   private readonly podium = new THREE.Group();
@@ -126,12 +153,14 @@ export class Game {
     this.hud.onPause = () => this.togglePause();
     // Leaving the page (another tab, another app, screen locked) silences
     // everything and pauses a race in progress; it waits on the pause menu.
+    // Online the race can't wait: the host's AI drives for a player who's away.
     const away = () => {
       this.sound.setAway(true);
-      if (this.state === 'race') this.togglePause();
+      if (this.state === 'race' && this.mode === 'solo') this.togglePause();
     };
     const back = () => {
       if (document.visibilityState === 'visible' && document.hasFocus()) this.sound.setAway(false);
+      if (document.visibilityState === 'visible' && this.sim) void this.keepAwake(true);
     };
     document.addEventListener('visibilitychange', () => (document.visibilityState === 'hidden' ? away() : back()));
     window.addEventListener('blur', away);
@@ -164,13 +193,39 @@ export class Game {
       this.startRace();
     };
     this.menu.onResume = () => this.togglePause();
-    this.menu.onRestart = () => this.startRace();
-    this.menu.onQuit = () => this.toMenu();
+    this.menu.onRestart = () => {
+      if (this.mode === 'host') this.hostBackToRoom();
+      else this.startRace();
+    };
+    this.menu.onQuit = () => {
+      if (this.mode === 'solo') this.toMenu();
+      else this.leaveOnline('');
+    };
     this.menu.onMute = () => this.sound.toggleMute();
+    this.menu.onOnline = () => this.online.lobby(loadName(), INVITE);
+
+    this.online = new OnlineMenu(this.menu.root);
+    this.online.onGesture = () => this.sound.unlock();
+    this.online.onBack = () => this.menu.title();
+    this.online.onHost = (name) => void this.hostOnline(name);
+    this.online.onJoin = (name, code) => void this.joinOnline(name, code);
+    this.online.onCancel = () => this.leaveOnline('');
+    this.online.onLeave = () => this.leaveOnline('');
+    this.online.onPick = (g) => {
+      if (this.host) this.host.pick(g);
+      else this.client?.pick(g);
+    };
+    this.online.onSettings = (set) => this.host?.setSettings(set);
+    this.online.onStart = () => this.startOnline();
+    this.netBadge = document.createElement('div');
+    this.netBadge.className = 'net-badge';
+    this.netBadge.hidden = true;
+    overlay.appendChild(this.netBadge);
 
     window.addEventListener('resize', () => this.resize());
     this.resize();
     this.menu.title();
+    if (INVITE) this.online.lobby(loadName(), INVITE);
     // Dev builds only: a handle for headless checks (teleporting to a spot, etc).
     if (import.meta.env.DEV) (window as unknown as { __game: Game }).__game = this;
     this.showPreview(0);
@@ -226,6 +281,196 @@ export class Game {
     this.encore = 5;
   }
 
+  // ---------------------------------------------------------------- online
+
+  /** Open a room on this phone and wait in it. */
+  private async hostOnline(name: string): Promise<void> {
+    saveName(name);
+    this.online.busy('Opening a room…');
+    const host = new NetHost(nowSecs, name, this.chosen);
+    host.setSettings({ track: this.trackIndex, difficulty: this.difficulty, swagger: this.swaggerOn, ...(DEV_LAPS ? { laps: DEV_LAPS } : {}) });
+    try {
+      const room = await hostRoom((link) => host.accept(link));
+      if (this.menu.root.dataset.screen !== 'online') {
+        room.close(); // Cancelled while it was opening.
+        return;
+      }
+      this.peer = room;
+      this.roomCode = room.code;
+    } catch (e) {
+      this.online.lobby(name, '', (e as Error).message);
+      return;
+    }
+    this.host = host;
+    this.mode = 'host';
+    host.onRoom = () => {
+      if (this.state === 'menu' && this.menu.root.dataset.screen === 'room') this.showRoom();
+    };
+    this.showRoom();
+  }
+
+  /** Join the room with this code and wait in it. */
+  private async joinOnline(name: string, code: string): Promise<void> {
+    saveName(name);
+    this.online.busy(`Joining room ${code}…`);
+    let joined: Awaited<ReturnType<typeof joinRoom>>;
+    try {
+      joined = await joinRoom(code);
+    } catch (e) {
+      if (this.menu.root.dataset.screen === 'online') this.online.lobby(name, code, (e as Error).message);
+      return;
+    }
+    if (this.menu.root.dataset.screen !== 'online') {
+      joined.close();
+      return;
+    }
+    this.peer = joined;
+    this.roomCode = code;
+    this.mode = 'client';
+    const client = new NetClient(joined.link, nowSecs, cleanName(name), this.chosen);
+    this.client = client;
+    client.onRoom = () => {
+      if (this.state === 'menu') this.showRoom();
+    };
+    client.onStart = () => this.beginOnline();
+    client.onBack = () => this.backToRoom();
+    client.onClosed = (why) => this.leaveOnline(why);
+  }
+
+  /** The room screen, with this phone's gorilla on the podium and the chosen track behind. */
+  private showRoom(): void {
+    const room = this.host
+      ? { seats: this.host.seats, settings: this.host.settings, me: 'host' }
+      : this.client?.room
+        ? { seats: this.client.room.seats, settings: this.client.room.settings, me: this.client.room.you }
+        : null;
+    if (!room) return;
+    const mine = room.seats.find((s) => s.id === room.me);
+    if (mine && mine.gorilla !== this.chosen) {
+      this.chosen = mine.gorilla;
+      this.showPreview(mine.gorilla);
+    }
+    if (room.settings.track !== this.trackIndex) this.selectTrack(room.settings.track);
+    this.podium.visible = true;
+    this.online.room({ code: this.roomCode, hosting: !!this.host, ...room });
+  }
+
+  /** The host starts the race for everyone. */
+  private startOnline(): void {
+    const host = this.host;
+    if (!host) return;
+    this.seed = 1 + Math.floor(Math.random() * 99999);
+    host.start(this.seed);
+    this.beginOnline();
+  }
+
+  /** The race this phone hosts or joined is built: show it. */
+  private beginOnline(): void {
+    const race = this.host?.race ?? this.client?.race;
+    if (!race) return;
+    this.endRace();
+    this.selectTrack(race.config.track);
+    this.player = race.own;
+    this.names = race.config.names;
+    // Players' karts carry their names (HUD, results); AI karts their gorilla's.
+    this.roster = race.config.roster.map((g, i) => (this.names[i] ? { ...GORILLAS[g]!, name: this.names[i]! } : GORILLAS[g]!));
+    this.beginRace(race.sim, race.drivers);
+  }
+
+  /** Host: everyone back to the room (results, or a race abandoned). */
+  private hostBackToRoom(): void {
+    this.host?.backToRoom();
+    this.backToRoom();
+  }
+
+  private backToRoom(): void {
+    this.sim = null; // Freed by the netcode.
+    this.endRace();
+    this.state = 'menu';
+    this.hud.show(false);
+    this.touch.show(false);
+    this.podium.visible = true;
+    this.sound.stopEngine();
+    this.showRoom();
+  }
+
+  /** Leave the room (or close it, as host) and go back to the online screen. */
+  private leaveOnline(why: string): void {
+    const wasOnline = this.mode !== 'solo' || this.peer;
+    if (this.client) this.client.onClosed = () => {};
+    this.host?.close();
+    this.client?.leave();
+    this.peer?.close();
+    this.host = null;
+    this.client = null;
+    this.peer = null;
+    this.mode = 'solo';
+    if (this.sim) this.toMenu();
+    this.state = 'menu';
+    this.podium.visible = true;
+    if (wasOnline || why) this.online.lobby(loadName(), '', why);
+  }
+
+  /** The waiting banner and the connection badge. */
+  private netStatus(): void {
+    const sim = this.sim!;
+    let text = '';
+    if (this.host?.loading) text = 'Waiting for everyone to load…';
+    else if (this.client && (this.client.stalled || sim.clock === 0)) text = this.client.stalled ? 'Waiting for the host…' : 'Starting…';
+    const away = this.host?.players.filter((p) => p.away && !p.gone).map((p) => this.names[p.kart]) ?? [];
+    const badge = this.client ? `📶 ${Math.round(this.client.rtt * 1000)} ms` : `Room ${this.roomCode}${away.length ? ` · ${away.join(', ')} away (AI driving)` : ''}`;
+    this.netBadge.hidden = this.state !== 'race';
+    this.netBadge.innerHTML = `${text ? `<b>${text}</b>` : ''}<span>${badge}</span>`;
+    this.netBadge.classList.toggle('waiting', !!text);
+  }
+
+  private resultRows(): ResultRow[] {
+    const sim = this.sim!;
+    return sim.standings().map((i) => ({
+      gorilla: this.roster[i]!,
+      name: this.names[i] || undefined,
+      time: sim.progress[i]!.finishTime,
+      player: i === this.player,
+      dnf: sim.progress[i]!.dnf,
+      racing: this.mode !== 'solo' && sim.progress[i]!.finishTime === null && !sim.progress[i]!.dnf,
+    }));
+  }
+
+  private resultsSig(): string {
+    const sim = this.sim!;
+    return sim.standings().map((i) => `${i}:${sim.progress[i]!.finishTime ?? (sim.progress[i]!.dnf ? 'x' : '-')}`).join();
+  }
+
+  /** Online, the results fill in as the others finish. */
+  private refreshResults(dt: number): void {
+    this.resultsTimer -= dt;
+    if (this.resultsTimer > 0 || !this.sim) return;
+    this.resultsTimer = 0.5;
+    const sig = this.resultsSig();
+    if (sig === this.resultsKey) return;
+    this.resultsKey = sig;
+    this.menu.results(this.resultRows(), this.mode);
+  }
+
+  /** Keep a phone's screen on through a race (where the browser allows it). */
+  private async keepAwake(on: boolean): Promise<void> {
+    const wl = (navigator as Navigator & { wakeLock?: { request(type: 'screen'): Promise<{ release(): Promise<void> }> } }).wakeLock;
+    try {
+      if (!on) {
+        await this.wakeLock?.release();
+        this.wakeLock = null;
+      } else if (wl && !this.wakeLock && document.visibilityState === 'visible') {
+        const lock = await wl.request('screen');
+        this.wakeLock = lock;
+        (lock as unknown as EventTarget).addEventListener?.('release', () => {
+          if (this.wakeLock === lock) this.wakeLock = null;
+        });
+      }
+    } catch {
+      // Not allowed (battery saver, iframe): the screen may dim, the race goes on.
+    }
+  }
+
   private toMenu(): void {
     this.endRace();
     this.state = 'menu';
@@ -250,6 +495,8 @@ export class Game {
     this.stage.scene.add(this.raceGroup);
     this.views = [];
     this.itemsView = null;
+    this.netBadge.hidden = true;
+    void this.keepAwake(false);
   }
 
   private startRace(): void {
@@ -273,18 +520,29 @@ export class Game {
       swagger: this.swaggerOn,
       moves: this.roster.map((g) => MOVES[GORILLAS.indexOf(g)]!),
     });
-    this.sim = sim;
     // A spread of skill across the field, set by the difficulty.
     const levels = fieldLevels(this.difficulty, sim.karts.length - 1, new Rng(this.seed + 7));
     let next = 0;
-    this.drivers = sim.karts.map(
+    const drivers = sim.karts.map(
       (k) => new AiDriver(personality(sim.rng, k.index, k.index === this.player ? 0.8 : levels[next++]!)),
     );
+    this.mode = 'solo';
+    this.names = [];
+    this.beginRace(sim, drivers);
+  }
+
+  /** Views, HUD and controls for a race that is ready to go (solo or online). */
+  private beginRace(sim: RaceSim, drivers: AiDriver[]): void {
+    this.sim = sim;
+    this.drivers = drivers;
     this.views = sim.karts.map((k, i) => {
       const v = new KartView(this.roster[i]!, { ink: this.stage.quality.ink });
       this.raceGroup.add(v.shadow);
       v.capture(k, true);
       this.raceGroup.add(v.object);
+      // Online, other players' names float over their karts.
+      const name = this.names[i];
+      if (name && i !== this.player) v.object.add(nameTag(name));
       return v;
     });
     this.itemsView = new ItemsView(sim.items);
@@ -304,14 +562,16 @@ export class Game {
     this.podium.visible = false;
     this.cam.cut();
     this.state = 'race';
+    this.resultsKey = '';
     this.sound.unlock();
     this.sound.startEngine();
+    void this.keepAwake(true);
   }
 
   private togglePause(): void {
     if (this.state === 'race') {
       this.state = 'paused';
-      this.menu.pause(this.sound.muted);
+      this.menu.pause(this.sound.muted, this.mode !== 'solo');
       this.sound.stopEngine();
     } else if (this.state === 'paused') {
       this.state = 'race';
@@ -326,8 +586,20 @@ export class Game {
     const human: DriverInput = this.controls.sample(dt);
     const playerPr = sim.progress[this.player]!;
     const playerDone = playerPr.finishTime !== null || playerPr.dnf;
+    const net = this.host ?? this.client;
+    // Online, the race runs on through the menu and the results: the AI drives.
+    const driving = this.state === 'race' && !playerDone && !AUTOPILOT;
     while (this.acc >= sim.dt) {
       this.acc -= sim.dt;
+      if (net) {
+        if (!net.step(driving ? human : null)) {
+          this.acc = 0;
+          break;
+        }
+        sim.karts.forEach((k, i) => this.views[i]!.capture(k, sim.respawned.includes(i)));
+        this.handleEvents(sim);
+        continue;
+      }
       const inputs = sim.karts.map((k, i) => {
         if (i === this.player && !playerDone && !AUTOPILOT) return human;
         return this.drivers[i]!.drive(sim.dt, k, sim.progress[i]!, sim.track, sim.karts, sim.items, playerPr.dist, sim);
@@ -341,6 +613,12 @@ export class Game {
       sim.karts.forEach((k, i) => this.views[i]!.capture(k, sim.respawned.includes(i)));
       this.handleEvents(sim);
     }
+    if (net) this.netStatus();
+    if (this.state === 'results') {
+      this.refreshResults(dt);
+      return;
+    }
+    if (this.state !== 'race') return;
 
     // Lap and finish callouts for the player.
     if (playerPr.lap !== this.lastLap && playerPr.finishTime === null) {
@@ -371,13 +649,8 @@ export class Game {
     this.sound.stopEngine();
     this.touch.show(false);
     this.hud.show(false);
-    const rows: ResultRow[] = sim.standings().map((i) => ({
-      gorilla: this.roster[i]!,
-      time: sim.progress[i]!.finishTime,
-      player: i === this.player,
-      dnf: sim.progress[i]!.dnf,
-    }));
-    this.menu.results(rows);
+    this.menu.results(this.resultRows(), this.mode);
+    this.resultsKey = this.resultsSig();
     // Only karts that actually finished get a step.
     this.buildFinishPodium(sim.standings().filter((i) => sim.progress[i]!.finishTime !== null).slice(0, 3));
   }
@@ -766,8 +1039,8 @@ export class Game {
     if (venue?.view.crater && this.state !== 'paused') this.erupt(dt, venue.view.crater);
 
     const sim = this.sim;
-    if (sim && (this.state === 'race' || this.state === 'results')) {
-      if (this.state === 'race') this.stepRace(dt);
+    if (sim && (this.state === 'race' || (this.mode !== 'solo' && (this.state === 'paused' || this.state === 'results')))) {
+      this.stepRace(dt);
     }
 
     if (sim && this.state === 'results' && this.finishPodium) {
@@ -891,6 +1164,45 @@ function textTexture(text: string, fill: string, ink: string): THREE.CanvasTextu
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
+}
+
+/** A floating name over another player's kart. */
+function nameTag(name: string): THREE.Sprite {
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 64;
+  const g = c.getContext('2d')!;
+  g.font = 'bold 40px "Lilita One", "Arial Black", sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.lineWidth = 8;
+  g.strokeStyle = '#2a1a0e';
+  g.strokeText(name, 128, 34);
+  g.fillStyle = '#fff6dd';
+  g.fillText(name, 128, 34);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+  sprite.scale.set(3.2, 0.8, 1);
+  sprite.position.set(0, 3.1, 0);
+  sprite.renderOrder = 10;
+  return sprite;
+}
+
+function loadName(): string {
+  try {
+    return localStorage.getItem('jj-name') ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function saveName(name: string): void {
+  try {
+    localStorage.setItem('jj-name', cleanName(name));
+  } catch {
+    // Storage blocked.
+  }
 }
 
 function loadDifficulty(): Difficulty {

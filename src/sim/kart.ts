@@ -79,6 +79,7 @@ export class Kart {
   readonly index: number;
   readonly body: RAPIER.RigidBody;
   readonly collider: RAPIER.Collider;
+  private readonly skirt: RAPIER.Collider;
   private readonly world: RAPIER.World;
   private readonly rapier: typeof RAPIER;
   readonly wheels: WheelState[];
@@ -168,6 +169,17 @@ export class Kart {
   }
   /** Engine and top-speed multiplier: AI skill and rubber-banding. 1 for players. */
   power = 1;
+  /**
+   * Online play: a proxy kart is driven somewhere else (another player's
+   * phone) and only follows the poses it is given. It has no solid collider:
+   * an immovable body jerked along by network updates crushes and launches
+   * whatever it presses against. Karts driven here bump it softly instead
+   * (`RaceSim` does that), and its own phone sees the bump the other way.
+   */
+  proxy = false;
+  private proxyVel: Vec3 = v3();
+  /** A proxy's phone reported a landing: counts as `landedThisStep` on its next step. */
+  reportedLanding = false;
   private wasAirborne = false;
   private upsideTime = 0;
 
@@ -195,7 +207,7 @@ export class Kart {
       this.body,
     );
     const skirtHalf = 0.42;
-    world.createCollider(
+    this.skirt = world.createCollider(
       rapier.ColliderDesc.cuboid(h.x, skirtHalf, h.z)
         .setTranslation(0, -h.y - skirtHalf, 0)
         .setDensity(0)
@@ -239,7 +251,27 @@ export class Kart {
   }
 
   get velocity(): Vec3 {
-    return this.body.linvel();
+    return this.proxy ? this.proxyVel : this.body.linvel();
+  }
+
+  /** Switch between driven here (dynamic) and driven elsewhere (kinematic proxy). */
+  setProxy(on: boolean): void {
+    if (on === this.proxy) return;
+    const v = this.velocity;
+    this.proxy = on;
+    const T = this.rapier.RigidBodyType;
+    this.body.setBodyType(on ? T.KinematicPositionBased : T.Dynamic, true);
+    this.collider.setEnabled(!on);
+    this.skirt.setEnabled(!on);
+    if (on) this.proxyVel = { x: v.x, y: v.y, z: v.z };
+    else this.body.setLinvel(v, true);
+  }
+
+  /** Where a proxy should be at the end of this step, and how fast it is going. */
+  pose(pos: Vec3, rot: Quat, vel: Vec3): void {
+    this.body.setNextKinematicTranslation(pos);
+    this.body.setNextKinematicRotation(rot);
+    this.proxyVel = vel;
   }
 
   get forward(): Vec3 {
@@ -320,10 +352,44 @@ export class Kart {
     return out;
   }
 
+  /**
+   * One step of a proxy: status timers run down here too (so the race's rules
+   * see them), but where it is comes from `pose`.
+   */
+  stepProxy(dt: number, raw: DriverInput): void {
+    this.applied = this.effectiveInput(raw);
+    this.tick(dt);
+    this.landedThisStep = this.reportedLanding;
+    this.reportedLanding = false;
+    this.sinceFlight += dt;
+    if (this.flyTime > 0) {
+      this.flyTime = Math.max(0, this.flyTime - dt);
+      this.flyElapsed += dt;
+      if (this.flyTime === 0) this.sinceFlight = 0;
+    }
+    const spin = (this.forwardSpeed / KART.wheelRadius) * dt;
+    for (const w of this.wheels) w.spin += spin;
+    this.prevInput = { ...raw };
+  }
+
   /** Advance one fixed step. Call before `world.step()`. */
   step(dt: number, raw: DriverInput): void {
     const input = this.effectiveInput(raw);
     this.applied = input;
+    this.tick(dt);
+
+    this.sinceFlight += dt;
+    if (this.flyTime > 0) {
+      this.fly(dt, input);
+      this.prevInput = { ...raw };
+      return;
+    }
+    this.drive(dt, input);
+    this.prevInput = { ...raw };
+  }
+
+  /** Status timers. */
+  private tick(dt: number): void {
     this.boostTime = Math.max(0, this.boostTime - dt);
     this.spinTime = Math.max(0, this.spinTime - dt);
     this.wobbleTime = Math.max(0, this.wobbleTime - dt);
@@ -346,14 +412,10 @@ export class Kart {
       this.swingTime += dt;
       if (this.swingTime > ITEMS.swingTime) this.swingSide = 0;
     }
+  }
 
-    this.sinceFlight += dt;
-    if (this.flyTime > 0) {
-      this.fly(dt, input);
-      this.prevInput = { ...raw };
-      return;
-    }
-
+  /** Wheels, tyres, water and air: everything but the parrot. */
+  private drive(dt: number, input: DriverInput): void {
     const body = this.body;
     const q = this.rotation;
     const pos = this.position;
@@ -499,7 +561,6 @@ export class Kart {
     }
 
     this.checkFlipped(dt, up, v2);
-    this.prevInput = { ...raw };
   }
 
   /**

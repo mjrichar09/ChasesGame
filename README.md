@@ -18,6 +18,13 @@ on lap 2 (pick the side its crown didn't land on), Canopy Creek's creek floods o
 laps 2 and 3 (hit the water fast and straight to **skim** across the top — slow down or swerve and you wade), and on Treetop Tangle a cracked branch snaps off on lap 3 — leaving
 a new gap with the broken stub as a ramp.
 
+On a phone the game goes **fullscreen** at the first tap (Android, iPad). On an
+iPhone, use Share → **Add to Home Screen** to play fullscreen.
+
+**Play online** with up to 8 friends: one phone hosts a room and shares its
+4-digit code (or an invite link); AI gorillas fill the empty karts. No accounts, no
+server to run — phones connect directly over WebRTC. See `docs/multiplayer.md`.
+
 Pick your rivals: **Chill**, **Normal** or **Wild**. Every field is a spread of skill, from rookies
 who brake early, wobble and waste their items to an ace or two who don't.
 

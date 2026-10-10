@@ -1,0 +1,12 @@
+{
+  "name": "Jungle Jalopies",
+  "short_name": "Jalopies",
+  "description": "Eight gorillas. Junk karts. Too many bananas.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "background_color": "#1f4d2a",
+  "theme_color": "#1f4d2a",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
