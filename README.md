@@ -7,10 +7,10 @@ gorillas over three laps: bouncy suspension, kicker ramps, banana boosts and
 Road Rash-style snake whacks. The corners want braking — overcook one and you
 slide into the logs.
 
-- **Vine Valley** — sunny and fast, with a river gap to clear.
-- **Canopy Creek** — deep under a full jungle canopy; tight turns and a creek to ford twice.
-- **Treetop Tangle** — thirty metres up along the tops of giant branches; tree-to-tree leaps and no railing on the bare stretches.
-- **Lava Run** — the volcano is erupting: race point to point down the mountain with the lava
+- **Vine Valley** — sunny and fast: a broad start straight, a single-file squeeze through the ferns, and a river gap to clear.
+- **Canopy Creek** — deep under a full jungle canopy; tight turns, narrow hairpins and a creek to ford twice (the first ford is wide — pick your line).
+- **Treetop Tangle** — thirty metres up along the tops of giant branches; broad boughs, a tightrope branch, tree-to-tree leaps and no railing on the bare stretches.
+- **Lava Run** — the volcano is erupting: race point to point from the broad crater rim, along narrow ledges, down to the village with the lava
   chasing you. It is a little slower than a clean run and much faster than a crash. Caught is out.
 
 The jungle changes mid-race: on Vine Valley a giant tree crashes across the road

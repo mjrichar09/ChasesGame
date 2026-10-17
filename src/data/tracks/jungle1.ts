@@ -1,8 +1,8 @@
 /**
  * Vine Valley — the first circuit.
  *
- * A long start straight, a kicker-strewn sweeper, a hairpin, an S through the
- * ferns, a climb to the river gap, then a twisty run home. Coordinates are
+ * A long, wide start straight, a kicker-strewn sweeper, a hairpin, a narrow
+ * S through the ferns, a climb to the river gap, then a twisty run home. Coordinates are
  * metres; the start straight runs along +Z.
  */
 import type { TrackDef } from '../../sim/track.js';
@@ -34,6 +34,13 @@ export const VINE_VALLEY: TrackDef = {
     { x: 0, z: -162, y: 1 },
   ],
   features: [
+    // A broad start straight for the pack to fan out on; a second wide run
+    // across the top. In between, the fern squeeze — single file through the
+    // S — and a tight neck through the corners after the river.
+    { kind: 'width', at: 0, offset: 25, length: 125, width: 21 },
+    { kind: 'width', at: 3, offset: 10, length: 50, width: 20 },
+    { kind: 'width', at: 8, offset: 8, length: 70, width: 10 },
+    { kind: 'width', at: 11, offset: 0, length: 40, width: 11 },
     // Twin kickers on the opening sweeper — pick a side.
     { kind: 'kicker', at: 2, offset: -18, length: 6, height: 1.1, lateral: -4, width: 5 },
     { kind: 'kicker', at: 2, offset: -18, length: 6, height: 1.1, lateral: 4, width: 5 },

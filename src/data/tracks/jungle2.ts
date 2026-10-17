@@ -49,6 +49,13 @@ export const CANOPY_CREEK: TrackDef = {
     { x: -6, z: -116, y: 1 },
   ],
   features: [
+    // Wide on the start straight and at the first ford (room to pick a line
+    // through the water); the run down to the second ford and the hairpins at
+    // the back pinch in.
+    { kind: 'width', at: 0, offset: 10, length: 100, width: 20 },
+    { kind: 'width', at: 5, offset: -25, length: 50, width: 19 },
+    { kind: 'width', at: 13, offset: 5, length: 30, width: 11, ease: 20 },
+    { kind: 'width', at: 17, offset: 0, length: 45, width: 10.5 },
     { kind: 'kicker', at: 2, offset: -26, length: 6, height: 1.1 },
     { kind: 'stream', at: 5, width: 12, skew: 0.1 },
     { kind: 'kicker', at: 6, offset: 14, length: 6, height: 1.0, lateral: -3.5, width: 5 },
