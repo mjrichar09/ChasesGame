@@ -55,6 +55,12 @@ export const LAVA_RUN: TrackDef = {
   terrain: { height: volcanoHeight, margin: 150, spacing: 6 },
   points: route(),
   features: [
+    // A broad crater rim to start from and a wide run-out into the village;
+    // the switchbacks on the steep middle flank narrow to a ledge.
+    { kind: 'width', at: 0, offset: 0, length: 90, width: 18 },
+    { kind: 'width', at: 13, offset: -10, length: 55, width: 9.5 },
+    { kind: 'width', at: 14, offset: 40, length: 50, width: 10 },
+    { kind: 'width', at: 19, offset: 25, length: 170, width: 19 },
     { kind: 'kicker', at: 4, offset: 10, length: 7, height: 1.2 },
     { kind: 'kicker', at: 6, offset: 10, length: 6, height: 1.0, lateral: -3.5, width: 5 },
     { kind: 'kicker', at: 6, offset: 10, length: 6, height: 1.0, lateral: 3.5, width: 5 },

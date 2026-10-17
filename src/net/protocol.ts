@@ -19,7 +19,7 @@ import { Rng } from '../sim/rng.js';
 import { MOVES } from '../sim/swagger.js';
 
 /** Bumped whenever a message or the sim changes in a way older phones can't follow. */
-export const PROTOCOL = 1;
+export const PROTOCOL = 2;
 export const MAX_PLAYERS = RACE.karts;
 /** Sim steps between snapshots (120 Hz / 6 = 20 Hz). */
 export const SNAPSHOT_EVERY = 6;

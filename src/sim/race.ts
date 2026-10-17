@@ -288,7 +288,7 @@ export class RaceSim {
     } else if (d.kind === 'snap') {
       const s = track.anchor(d);
       const gap = { s0: s + d.rampLength, s1: s + d.rampLength + d.length };
-      track.kickers.push({ s0: s, s1: gap.s0, height: d.rampHeight, lateral: 0, halfWidth: track.def.width / 2 });
+      track.kickers.push({ s0: s, s1: gap.s0, height: d.rampHeight, lateral: 0, halfWidth: track.def.width / 2, full: true });
       track.gaps.push(gap);
       for (const smp of track.samples) if (track.inGap(smp.s)) smp.road = false;
       // New road (with the hole in it), the stub as a ramp, and no barrier over the drop.

@@ -37,6 +37,11 @@ export const TREETOP_TANGLE: TrackDef = {
     { x: -6, z: -98, y: 24 },
   ],
   features: [
+    // A broad bough across the start and another where two trees meet; a
+    // railed branch on the far side thins to a tightrope.
+    { kind: 'width', at: 0, offset: 30, length: 70, width: 14.5 },
+    { kind: 'width', at: 15, offset: -15, length: 40, width: 15 },
+    { kind: 'width', at: 12, offset: 10, length: 45, width: 8.5 },
     // Tree-to-tree leaps.
     { kind: 'gap', at: 4, offset: 10, length: 9, rampLength: 9, rampHeight: 1.9 },
     { kind: 'gap', at: 14, offset: 32, length: 9, rampLength: 9, rampHeight: 1.9 },

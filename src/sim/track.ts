@@ -66,7 +66,21 @@ export interface OpenDef extends TrackAnchor {
   side?: -1 | 0 | 1;
 }
 
-export type FeatureDef = KickerDef | GapDef | StreamDef | OpenDef;
+/**
+ * The road narrows or widens: `width` metres across for `length` metres,
+ * easing to and from the surrounding width over `ease` metres at each end.
+ * Chokes force a line (and a fight for it); wide stretches let the pack
+ * fan out and pass.
+ */
+export interface WidthDef extends TrackAnchor {
+  kind: 'width';
+  length: number;
+  width: number;
+  /** Taper at each end, m (default 25). */
+  ease?: number;
+}
+
+export type FeatureDef = KickerDef | GapDef | StreamDef | OpenDef | WidthDef;
 
 export interface PickupRowDef extends TrackAnchor {
   /** Lateral positions across the road, m (+ = right). */
@@ -123,6 +137,8 @@ export interface Kicker {
   height: number;
   lateral: number;
   halfWidth: number;
+  /** Spans the whole road, following its width (see `Track.kickerHalf`). */
+  full?: boolean;
 }
 
 export interface Gap {
@@ -209,6 +225,7 @@ export class Track {
 
     for (const f of def.features) {
       const s = this.anchor(f);
+      if (f.kind === 'width') continue; // Already in the samples.
       if (f.kind === 'open') {
         this.opens.push({ s0: s, s1: s + f.length, side: f.side ?? 0 });
         continue;
@@ -217,19 +234,24 @@ export class Track {
         this.waters.push({ s0: s - f.width / 2, s1: s + f.width / 2, skew: f.skew ?? 0, base: [s - f.width / 2, s + f.width / 2] });
       } else if (f.kind === 'kicker') {
         const hw = (f.width ?? def.width) / 2;
-        this.kickers.push({ s0: s, s1: s + f.length, height: f.height, lateral: f.lateral ?? 0, halfWidth: hw });
+        this.kickers.push({ s0: s, s1: s + f.length, height: f.height, lateral: f.lateral ?? 0, halfWidth: hw, full: f.width === undefined });
       } else {
         // The take-off ramp ends where the road does.
-        this.kickers.push({ s0: s - f.rampLength, s1: s, height: f.rampHeight, lateral: 0, halfWidth: def.width / 2 });
+        this.kickers.push({ s0: s - f.rampLength, s1: s, height: f.rampHeight, lateral: 0, halfWidth: def.width / 2, full: true });
         this.gaps.push({ s0: s, s1: s + f.length });
       }
     }
     for (const sample of this.samples) sample.road = !this.inGap(sample.s);
 
+    // Pickup lanes are written for the track's usual width: they spread or
+    // squeeze with the road where it is wider or narrower.
     for (const row of def.pickups) {
       const s = this.anchor(row);
-      for (const lateral of row.lanes) {
-        this.pickups.push({ s, lateral, pos: add(this.pointAt(s, lateral), v3(0, 1.1 - this.surfaceDrop(lateral), 0)) });
+      const hw = this.at(s).halfWidth;
+      const k = hw / (def.width / 2);
+      for (const lane of row.lanes) {
+        const lateral = lane * k;
+        this.pickups.push({ s, lateral, pos: add(this.pointAt(s, lateral), v3(0, 1.1 - this.surfaceDrop(lateral, hw), 0)) });
       }
     }
     this.buildWalls();
@@ -373,12 +395,17 @@ export class Track {
     return { s, lateral: dot(rel, fine.r), height: dot(rel, fine.n) };
   }
 
+  /** Half the width of a kicker at `s`: a full-width one follows the road. */
+  kickerHalf(k: Kicker, s: number): number {
+    return k.full ? this.at(s).halfWidth : k.halfWidth;
+  }
+
   /** Height of the kicker surface above the road at (s, lateral), 0 off-ramp. */
   kickerHeight(s: number, lateral: number): number {
     let h = 0;
     for (const k of this.kickers) {
       if (!this.between(s, k.s0, k.s1)) continue;
-      if (Math.abs(lateral - k.lateral) > k.halfWidth) continue;
+      if (Math.abs(lateral - k.lateral) > this.kickerHalf(k, s)) continue;
       const f = this.wrap(s - k.s0) / this.wrap(k.s1 - k.s0);
       h = Math.max(h, k.height * f);
     }
@@ -511,7 +538,7 @@ export class Track {
         const h = (k.height * i) / steps;
         const smp = this.at(s);
         for (const side of [-1, 1]) {
-          const lat = k.lateral + side * k.halfWidth;
+          const lat = k.lateral + side * this.kickerHalf(k, s);
           const base = add(this.pointAt(s, lat), v3(0, -this.surfaceDrop(lat, smp.halfWidth), 0));
           // Sink the base a little so the ramp's leading edge is flush, not a step.
           pts.push(base.x - smp.n.x * 0.15, base.y - smp.n.y * 0.15, base.z - smp.n.z * 0.15);
@@ -571,6 +598,29 @@ function relaxTightCorners(raw: { p: Vec3; w: number }[], closed: boolean): void
   }
 }
 
+/** Narrow and wide stretches (`WidthDef`): each sample's width eases toward the stretch's over its tapers. */
+function applyWidths(def: TrackDef, raw: { w: number }[], pointS: number[], length: number, closed: boolean): void {
+  for (const f of def.features) {
+    if (f.kind !== 'width') continue;
+    const ease = f.ease ?? 25;
+    let s0 = (pointS[f.at] ?? 0) + (f.offset ?? 0);
+    if (closed) s0 = ((s0 % length) + length) % length;
+    raw.forEach((r, i) => {
+      let d = i * DS - s0;
+      // On a loop, measure to the nearer copy of the stretch.
+      if (closed) {
+        d = ((d % length) + length) % length;
+        if (d > length - ease) d -= length;
+      }
+      const into = d < 0 ? 1 + d / ease : d > f.length ? 1 - (d - f.length) / ease : 1;
+      if (into <= 0) return;
+      const u = Math.min(1, into);
+      const smooth = u * u * (3 - 2 * u);
+      r.w += (f.width - r.w) * smooth;
+    });
+  }
+}
+
 /** Centripetal Catmull-Rom between p1 and p2. */
 function catmull(p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3, t: number): Vec3 {
   const alpha = 0.5;
@@ -603,7 +653,11 @@ function widen(def: TrackDef): TrackDef {
     width: def.width * k,
     points: def.points.map((p) => (p.width === undefined ? p : { ...p, width: p.width * k })),
     features: def.features.map((f) =>
-      f.kind === 'kicker' ? { ...f, lateral: (f.lateral ?? 0) * k, width: f.width === undefined ? undefined : f.width * k } : f,
+      f.kind === 'kicker'
+        ? { ...f, lateral: (f.lateral ?? 0) * k, width: f.width === undefined ? undefined : f.width * k }
+        : f.kind === 'width'
+          ? { ...f, width: f.width * k }
+          : f,
     ),
     pickups: def.pickups.map((r) => ({ ...r, lanes: r.lanes.map((l) => l * k) })),
   };
@@ -664,7 +718,14 @@ function buildSamples(def: TrackDef): { samples: Sample[]; pointS: number[] } {
     const b = dense[(j + 1) % dense.length]!;
     raw.push({ p: add(a.p, scale(sub(b.p, a.p), f)), w: a.w + (b.w - a.w) * f });
   }
+  // Corners are rounded for the wider of the usual road and any wide stretch,
+  // so narrowing a corner never sharpens it — it only takes road away.
+  const base = raw.map((r) => r.w);
+  applyWidths(def, raw, pointS, count * DS, closed);
+  const narrowed = raw.map((r) => r.w);
+  raw.forEach((r, i) => (r.w = Math.max(r.w, base[i]!)));
   relaxTightCorners(raw, !def.open);
+  raw.forEach((r, i) => (r.w = narrowed[i]!));
 
   const up = v3(0, 1, 0);
   const wrapI = (i: number) => (closed ? ((i % count) + count) % count : clamp(i, 0, count - 1));

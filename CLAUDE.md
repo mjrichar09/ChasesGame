@@ -75,6 +75,12 @@ Playwright. Deploys to GitHub Pages (`.github/workflows/pages.yml`).
   hundreds of separate Rapier colliders cost ~60% more per physics step.
 - Road widths are scaled once by `WIDTH_SCALE` in `sim/track.ts`; track data stays
   in its original units.
+- Narrow and wide stretches are `width` features (`WidthDef`: width, length, taper).
+  Corners are rounded for the wider of the usual width and the stretch, so narrowing
+  never sharpens a corner. Full-width ramps and pickup lanes follow the local width
+  (`Track.kickerHalf`). `tests/track.test.ts` checks part-width ramps and pickups stay
+  on the road and separate stretches never overlap. Keep chokes off chicanes and
+  out of jump landings: both multiplied respawns in telemetry.
 - Looks: `render/polish.ts` (rim light, ink outlines on desktop, contact shadows,
   clouds/sun, roadside tufts); `Stage.render` runs bloom + grade + vignette on
   desktop only (`Quality.post`). Headless SwiftShader is very slow with post on —

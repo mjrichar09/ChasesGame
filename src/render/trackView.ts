@@ -359,12 +359,13 @@ function kickerMeshes(track: Track): THREE.Mesh[] {
       const s = k.s0 + (span * i) / steps;
       const h = (k.height * i) / steps;
       const smp = track.at(s);
+      const half = track.kickerHalf(k, s);
       for (const sd of [-1, 1]) {
-        const lat = k.lateral + sd * k.halfWidth;
+        const lat = k.lateral + sd * half;
         const base = track.pointAt(s, lat);
         base.y -= track.surfaceDrop(lat, smp.halfWidth);
         pos.push(base.x + smp.n.x * h, base.y + smp.n.y * h + 0.03, base.z + smp.n.z * h);
-        uv.push(sd < 0 ? 0 : (k.halfWidth * 2) / 4, i / steps);
+        uv.push(sd < 0 ? 0 : (half * 2) / 4, i / steps);
       }
     }
     for (let i = 0; i < steps; i++) {
@@ -389,13 +390,12 @@ function kickerMeshes(track: Track): THREE.Mesh[] {
       return p;
     };
     for (const sd of [-1, 1]) {
-      const lat = k.lateral + sd * k.halfWidth;
-      const a = lo(k.s0, lat);
-      const b = lo(k.s1, lat);
+      const a = lo(k.s0, k.lateral + sd * track.kickerHalf(k, k.s0));
+      const b = lo(k.s1, k.lateral + sd * track.kickerHalf(k, k.s1));
       sides.push(a.x, a.y, a.z, b.x, b.y, b.z, b.x + lip.n.x * k.height, b.y + lip.n.y * k.height, b.z + lip.n.z * k.height);
     }
-    const l = lo(k.s1, k.lateral - k.halfWidth);
-    const r = lo(k.s1, k.lateral + k.halfWidth);
+    const l = lo(k.s1, k.lateral - track.kickerHalf(k, k.s1));
+    const r = lo(k.s1, k.lateral + track.kickerHalf(k, k.s1));
     const h = k.height;
     sides.push(l.x, l.y, l.z, r.x, r.y, r.z, l.x, l.y + h, l.z, r.x, r.y, r.z, r.x, r.y + h, r.z, l.x, l.y + h, l.z);
     const sg = new THREE.BufferGeometry();
