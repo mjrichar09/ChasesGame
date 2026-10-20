@@ -10,12 +10,14 @@
  */
 
 import * as THREE from 'three';
+import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Gorilla } from '../data/gorillas.js';
 import { ITEMS, KART, PARROT } from '../data/tuning.js';
 import type { Kart } from '../sim/kart.js';
 import { celebrate } from './celebrate.js';
 import { type ParrotRig, animateParrot, buildParrot } from './parrot.js';
 import { contactShadow, outline, rimLight } from './polish.js';
+import { coconutModel } from './itemsView.js';
 import { type KartRig, buildKart } from './kartModel.js';
 import { GEO, PartBuilder, toon } from './toon.js';
 
@@ -29,6 +31,10 @@ export class KartView {
   readonly rig: KartRig;
   readonly gorilla: Gorilla;
   private readonly snake: THREE.Group;
+  /** The coconut, held in the right fist until it is thrown. */
+  private readonly nut: THREE.Group;
+  /** The boulder's roll, rad. */
+  private roll = 0;
   private prev: KartSnapshot = { pos: new THREE.Vector3(), rot: new THREE.Quaternion(), vel: new THREE.Vector3() };
   private curr: KartSnapshot = { pos: new THREE.Vector3(), rot: new THREE.Quaternion(), vel: new THREE.Vector3() };
   /** Torso lag spring: offset (m) and its velocity. */
@@ -72,6 +78,11 @@ export class KartView {
     this.snake = buildSnake();
     this.snake.visible = false;
     this.rig.gorilla.hands[1].add(this.snake);
+    this.nut = coconutModel();
+    this.nut.scale.setScalar(0.16 / gorilla.size);
+    this.nut.position.set(0, -0.12, 0.04);
+    this.nut.visible = false;
+    this.rig.gorilla.hands[1].add(this.nut);
     this.seatY = this.rig.gorilla.root.position.y;
     // Cartoon pop: a warm rim light, and ink outlines where the device can afford them.
     this.ink = opts.ink ?? false;
@@ -131,10 +142,7 @@ export class KartView {
       mark.position.set(0, 3.4, 0);
       const cool = new THREE.Mesh(new THREE.SphereGeometry(2.1, 20, 14), additive(0xffd84a));
       const fire = new THREE.Mesh(new THREE.SphereGeometry(1.9, 16, 12), additive(0xff4a1a));
-      const rock = new THREE.Mesh(
-        new THREE.IcosahedronGeometry(1.9, 1),
-        new THREE.MeshToonMaterial({ color: 0x7d776c, gradientMap: toon(0).gradientMap }),
-      );
+      const rock = boulder();
       for (const o of [star, mark, cool, fire, rock]) {
         o.visible = false;
         this.rig.root.add(o);
@@ -152,9 +160,16 @@ export class KartView {
     if (s.cool.visible) s.cool.scale.setScalar(1 + Math.sin(t * 8) * 0.05);
     s.fire.visible = kart.noBrakesTime > 0;
     if (s.fire.visible) s.fire.scale.set(1, 0.8 + Math.sin(t * 20) * 0.1, 1.3);
+    // The boulder sits on the road in place of the kart and rolls with it:
+    // forward speed over its radius, nose-first (+X turns the top toward +Z).
     s.rock.visible = kart.boulderTime > 0;
-    if (s.rock.visible) s.rock.rotation.x -= Math.max(0, kart.forwardSpeed) * dt * 0.55;
-    this.rig.gorilla.root.visible = !s.rock.visible;
+    if (s.rock.visible) {
+      this.roll += kart.forwardSpeed * dt / BOULDER_R;
+      s.rock.position.set(0, BOULDER_R - RIDE_HEIGHT, 0);
+      s.rock.rotation.set(this.roll, 0, 0);
+    }
+    this.rig.body.visible = !s.rock.visible;
+    for (const w of this.rig.wheels) w.node.visible = w.spring.visible = !s.rock.visible;
     // Over a victim's head: clapped, or the music that scrambled their steering.
     const kind = kart.steerSwapTime > 0 ? '🎵' : kart.slowTime > 0 ? '👏' : '';
     s.mark.visible = kind !== '';
@@ -349,6 +364,20 @@ export class KartView {
       this.snake.rotation.set(0, 0, 0);
     }
 
+    // Coconut: held in the right fist, then flung sidearm — the arm comes
+    // round flat from out to the side and whips across the front.
+    this.nut.visible = kart.item === 'coconut' && kart.throwSide === 0;
+    if (kart.throwSide !== 0) {
+      const t = Math.min(1, kart.throwTime / ITEMS.throwTime);
+      const whip = 1 - (1 - Math.min(1, t / 0.35)) ** 2;
+      const back = t < 0.35 ? 1 : 1 - (t - 0.35) / 0.65;
+      const arm = g.arms[1]!;
+      // Out flat to the right (z), swept from behind to across the front (y).
+      arm.rotation.set(0, (-0.5 + whip * 2.1) * back, -1.45 * back);
+      g.elbows[1]!.rotation.set(0, 0, -0.25 * back);
+      g.torso.rotation.y = (-0.35 + whip * 0.8) * back;
+    }
+
     // Spin-out: the gorilla flails.
     if (kart.spinning) {
       this.spinVisual += dt * 18;
@@ -368,6 +397,54 @@ export class KartView {
     if (kart.spinning || kart.wobbleTime > 0) this.celebLeft = 0;
     this.applyCelebration(dt);
   }
+}
+
+/** How far the chassis centre rides above the road, and the boulder's radius, m. */
+const RIDE_HEIGHT = 0.95;
+const BOULDER_R = 1.55;
+
+/**
+ * Granite Gus's boulder: a lumpy, faceted rock with darker patches, a pale
+ * band of quartz and moss on one side — markings, so its roll reads.
+ */
+function boulder(): THREE.Mesh {
+  let geo: THREE.BufferGeometry = new THREE.IcosahedronGeometry(1, 3);
+  geo.deleteAttribute('normal');
+  geo.deleteAttribute('uv');
+  geo = mergeVertices(geo);
+  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+  const p = new THREE.Vector3();
+  const lump = (d: THREE.Vector3) =>
+    Math.sin(d.x * 3.1 + 1.3) * Math.sin(d.y * 2.7 + 0.4) * Math.sin(d.z * 3.4 + 2.1) * 0.22 +
+    Math.sin(d.x * 7.3 + d.z * 5.1) * Math.sin(d.y * 6.7 + 1.9) * 0.06;
+  for (let i = 0; i < pos.count; i++) {
+    p.fromBufferAttribute(pos, i).normalize();
+    p.multiplyScalar(BOULDER_R * (1 + lump(p)));
+    pos.setXYZ(i, p.x, p.y, p.z);
+  }
+  geo = geo.toNonIndexed();
+  geo.computeVertexNormals();
+  // Colour each facet: granite, darker lumps, a quartz band, moss on top.
+  const at = geo.getAttribute('position') as THREE.BufferAttribute;
+  const colors = new Float32Array(at.count * 3);
+  const c = new THREE.Color();
+  const mid = new THREE.Vector3();
+  for (let f = 0; f < at.count; f += 3) {
+    mid.set(0, 0, 0);
+    for (let k = 0; k < 3; k++) mid.add(p.fromBufferAttribute(at, f + k));
+    mid.normalize();
+    const speck = Math.sin(f * 12.9898) * 43758.5453;
+    const n = speck - Math.floor(speck);
+    if (Math.abs(mid.x * 0.6 + mid.z * 0.8) < 0.12) c.setHex(0xd9d3c3);
+    else if (mid.y > 0.55 && n < 0.7) c.setHex(n < 0.35 ? 0x5f8f3e : 0x4f7d34);
+    else if (lump(mid) < -0.05) c.setHex(0x625d55);
+    else c.setHex(n < 0.3 ? 0x958f83 : n < 0.85 ? 0x847e73 : 0xa59f92);
+    for (let k = 0; k < 3; k++) c.toArray(colors, (f + k) * 3);
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  const mesh = new THREE.Mesh(geo, new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: toon(0).gradientMap }));
+  mesh.castShadow = true;
+  return mesh;
 }
 
 /** A floppy green snake, held by the tail. */

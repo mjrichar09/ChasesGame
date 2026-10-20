@@ -35,7 +35,7 @@ import {
   v3,
 } from './math.js';
 
-export type ItemKind = 'none' | 'banana' | 'snake' | 'parrot';
+export type ItemKind = 'none' | 'banana' | 'snake' | 'parrot' | 'coconut';
 
 /**
  * Collision groups (Rapier packs membership in the high 16 bits, filter in
@@ -103,6 +103,9 @@ export class Kart {
   swingSide: -1 | 0 | 1 = 0;
   swingTime = 0;
   swingCooldown = 0;
+  /** A coconut fling: which way it curves (the arm goes the other way first), and seconds into it; 0 = not throwing. */
+  throwSide: -1 | 0 | 1 = 0;
+  throwTime = 0;
   /** Seconds the kart has been wheels-up, for the renderer and landing thuds. */
   airTime = 0;
   /** Downward speed at the last touchdown, m/s — the size of the landing. */
@@ -423,6 +426,10 @@ export class Kart {
     if (this.swingSide !== 0) {
       this.swingTime += dt;
       if (this.swingTime > ITEMS.swingTime) this.swingSide = 0;
+    }
+    if (this.throwSide !== 0) {
+      this.throwTime += dt;
+      if (this.throwTime > ITEMS.throwTime) this.throwSide = 0;
     }
   }
 

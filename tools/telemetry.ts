@@ -13,7 +13,7 @@ console.log(def.name);
 const race = autoRace(def, { seed: arg('seed', 1), laps: arg('laps', 3) });
 const { sim } = race;
 const maxSteps = 60 * 8 * sim.laps * 120;
-let maxComp = 0, bottomOuts = 0, airSteps = 0, longestAir = 0, maxSpeed = 0, pickups = 0, boosts = 0, hits = 0, whacks = 0;
+let maxComp = 0, bottomOuts = 0, airSteps = 0, longestAir = 0, maxSpeed = 0, pickups = 0, boosts = 0, hits = 0, whacks = 0, throws = 0, conks = 0;
 const where: Record<string, number> = {};
 // Where each kart's time goes: spun out, wobbling (whacked/bonked), wading, crawling.
 const lost = sim.karts.map(() => ({ spin: 0, wobble: 0, wet: 0, slow: 0 }));
@@ -39,7 +39,7 @@ for (let i = 0; i < maxSteps && !sim.allFinished; i++) {
     if (e.type === 'swagger' && e.phase === 'hit') { moves[e.kart] = (moves[e.kart] ?? 0) + 1; moveKinds[e.move] = (moveKinds[e.move] ?? 0) + 1; }
     if (e.type === 'track') console.log(`  t=${sim.raceTime.toFixed(1)} TRACK EVENT ${e.kind}${e.stage ? ' stage ' + e.stage : ''}`);
     if (e.type === 'parrot') flights.push({ kart: e.kart, start: sim.progress[e.kart]!.dist, t0: sim.raceTime });
-    if (e.type === 'pickup') pickups++; else if (e.type === 'boost') boosts++; else if (e.type === 'peelHit') hits++; else if (e.type === 'whack') whacks++;
+    if (e.type === 'pickup') pickups++; else if (e.type === 'boost') boosts++; else if (e.type === 'peelHit') hits++; else if (e.type === 'whack') whacks++; else if (e.type === 'throw') throws++; else if (e.type === 'conk') conks++;
   }
   sim.items.events = [];
   for (const f of flights) if (f.done === undefined && sim.raceTime - f.t0 >= 7) f.done = sim.progress[f.kart]!.dist - f.start;
@@ -53,7 +53,7 @@ for (const i of sim.standings()) {
 }
 console.log(`max speed ${maxSpeed.toFixed(1)} m/s  max compression ${maxComp.toFixed(2)} m  bottom-out steps ${bottomOuts}`);
 console.log(`airtime ${(airSteps / 120 / sim.karts.length).toFixed(1)} s/kart  longest ${longestAir.toFixed(2)} s`);
-console.log(`pickups ${pickups} boosts ${boosts} peel hits ${hits} whacks ${whacks}`);
+console.log(`pickups ${pickups} boosts ${boosts} peel hits ${hits} whacks ${whacks} coconuts ${throws} (hit ${conks})`);
 console.log('respawns by s', where);
 const gains = flights.filter((f) => f.done !== undefined).map((f) => f.done!);
 console.log(`parrot flights ${flights.length}  lap metres gained in 7 s: ${gains.map((g) => g.toFixed(0)).join(' ')}  (driving covers ~${(7 * 24).toFixed(0)})`);

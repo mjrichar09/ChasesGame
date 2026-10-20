@@ -778,6 +778,11 @@ button:disabled {
   background: radial-gradient(circle at 40% 35%, #e9fbff, #9ce6ff);
 }
 
+.hud-item[data-kind='coconut'] {
+  --ring: #ff7a1f;
+  background: radial-gradient(circle at 40% 35%, #fff2e4, #ffc38f);
+}
+
 .hud-swagger {
   position: absolute;
   right: calc(152px + var(--safe-r));

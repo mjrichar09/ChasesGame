@@ -18,6 +18,7 @@ import { type Placement, type Props, type SceneryKind, buildProps } from '../sim
 import { type VolcanoView, buildVolcanoView, ocean, terrainMesh } from './volcanoView.js';
 import { type Sky, roadsideTufts, skyDressing } from './polish.js';
 import { BRANCH_N, type Track, WALL_HEIGHT, WALL_SOLID_HEIGHT, WALL_THICK, type Water, branchProfile } from '../sim/track.js';
+import { broadleaf, palm } from './flora.js';
 import { GEO, PartBuilder, toon } from './toon.js';
 
 export interface TrackView {
@@ -670,19 +671,8 @@ function vineArches(track: Track): THREE.Group {
 function scenery(props: Props): THREE.Group {
   const g = new THREE.Group();
   const protos = {
-    palm: proto((b, n) => {
-      for (let i = 0; i < 6; i++) b.add(n, GEO.cylinder, toon(i % 2 ? 0x8a5f36 : 0x7a5230), { pos: [Math.sin(i * 0.4) * 0.3, 0.8 + i * 1.5, 0], scale: [0.32 - i * 0.025, 1.6, 0.32 - i * 0.025] });
-      for (let i = 0; i < 7; i++) {
-        const a = (i / 7) * Math.PI * 2;
-        b.add(n, GEO.sphere, toon(i % 2 ? 0x3f9a34 : 0x5bb544), { pos: [Math.sin(a) * 1.8 + 0.6, 9.2, Math.cos(a) * 1.8], rot: [Math.cos(a) * 0.5, a, -Math.sin(a) * 0.5], scale: [0.5, 0.12, 2.0] });
-      }
-      for (let i = 0; i < 3; i++) b.add(n, GEO.sphere, toon(0x6b4a24), { pos: [0.6 + Math.sin(i * 2) * 0.3, 8.8, Math.cos(i * 2) * 0.3], scale: 0.28 });
-    }),
-    tree: proto((b, n) => {
-      b.add(n, GEO.cylinder, toon(0x6e4a2c), { pos: [0, 3, 0], scale: [0.55, 6, 0.55] });
-      for (const [x, y, z, s] of [[0, 7.5, 0, 3.2], [1.8, 6.4, 0.8, 2.2], [-1.6, 6.6, -0.6, 2.4], [0.4, 9, -0.6, 2]] as const)
-        b.add(n, GEO.sphereLo, toon(y > 8 ? 0x4ea83c : 0x2f7d2a), { pos: [x, y, z], scale: [s, s * 0.8, s] });
-    }),
+    palm: proto(palm),
+    tree: proto(broadleaf),
     fern: proto((b, n) => {
       for (let i = 0; i < 6; i++) {
         const a = (i / 6) * Math.PI * 2;

@@ -137,12 +137,36 @@ export const ITEMS = {
   /** Engine and top-speed multiplier while slowed (snake whack, Slow Clap). */
   slowPower: 0.55,
 
+  /**
+   * Coconut: flung sidearm at whoever is in front. It flies `coconutRange`
+   * ahead of the thrower (six kart lengths) at `coconutSpeed` on top of the
+   * kart's own speed, bending `coconutCurve` m sideways by the end toward the
+   * side of the button (the item button throws straight, or bends toward the
+   * nearest kart ahead). A hit keeps `coconutKeep` of the victim's speed and
+   * wobbles and slows it — a little gentler than a snake.
+   */
+  coconutRange: 6 * 2 * KART.half.z,
+  coconutSpeed: 26,
+  coconutCurve: 2.6,
+  /** Upward speed at release, m/s: a flat sidearm arc. */
+  coconutLift: 2.4,
+  /** The hit box round a victim's chassis, m beyond its half-size, and ± height. */
+  coconutReach: 0.55,
+  coconutHeight: 1.8,
+  coconutKeep: 0.5,
+  coconutWobble: 1.3,
+  coconutSlow: 1.4,
+  coconutShove: 700,
+  /** Seconds the throwing arm takes. */
+  throwTime: 0.4,
+
   pickupRadius: 1.9,
-  /** Respawned pickups roll parrot, then snake, then bananas. */
+  /** Respawned pickups roll parrot, then coconut, then snake, then bananas. */
   parrotChance: 0.15,
+  coconutChance: 0.2,
   pickupRespawn: 5,
   /** Chance a respawned pickup comes back as a snake rather than bananas. */
-  snakeChance: 0.35,
+  snakeChance: 0.27,
 } as const;
 
 /**

@@ -12,16 +12,21 @@
  * - **Snake:** three swings, left or right, Road Rash style. A swing hits the
  *   nearest kart alongside on that side: it loses most of its speed, wobbles
  *   and stays slowed for a moment.
+ * - **Coconut:** one throw, flung sidearm at whoever is in front. The left
+ *   and right attack buttons bend it that way; the item button throws it
+ *   straight, or bends it toward the nearest kart ahead. It flies six kart
+ *   lengths ahead of the thrower, then drops. A hit costs half your speed,
+ *   a wobble and a short slowdown.
  *
  * Players hold one item at a time. Everything is seeded, so a race replays
  * exactly from its seed and inputs.
  */
 
-import { ITEMS } from '../data/tuning.js';
+import { ITEMS, KART, SIM } from '../data/tuning.js';
 import type { DriverInput } from './input.js';
 import type { ItemKind, Kart } from './kart.js';
 import type { Move } from './swagger.js';
-import { type Vec3, add, dot, scale, sub, v3 } from './math.js';
+import { type Vec3, add, dot, normalize, scale, sub, v3 } from './math.js';
 import type { Rng } from './rng.js';
 import type { Track } from './track.js';
 
@@ -41,6 +46,19 @@ export interface Peel {
   age: number;
 }
 
+/** A coconut in the air. */
+export interface Coconut {
+  id: number;
+  owner: number;
+  pos: Vec3;
+  vel: Vec3;
+  /** Sideways acceleration that bends its flight, m/s². */
+  curve: Vec3;
+  /** Seconds flown, and how long it flies before it drops. */
+  age: number;
+  life: number;
+}
+
 export type ItemEvent =
   | { type: 'pickup'; kart: number; kind: Exclude<ItemKind, 'none'>; pos: Vec3 }
   | { type: 'boost'; kart: number; pos: Vec3 }
@@ -48,6 +66,9 @@ export type ItemEvent =
   | { type: 'peelHit'; kart: number; owner: number; pos: Vec3; peel?: number }
   | { type: 'swing'; kart: number; side: -1 | 1; pos: Vec3 }
   | { type: 'whack'; kart: number; victim: number; pos: Vec3 }
+  | { type: 'throw'; kart: number; side: -1 | 0 | 1; pos: Vec3; vel: Vec3; curve: Vec3; life: number }
+  | { type: 'conk'; kart: number; victim: number; pos: Vec3; vel: Vec3 }
+  | { type: 'coconutDrop'; kart: number; pos: Vec3; vel: Vec3 }
   | { type: 'bonk'; kart: number; pos: Vec3; strength: number }
   | { type: 'parrot'; kart: number; pos: Vec3 }
   | { type: 'toasted'; kart: number; pos: Vec3 }
@@ -67,7 +88,9 @@ export class Items {
   readonly pickups: PickupState[];
   readonly peels: Peel[] = [];
   readonly loose: Loose[] = [];
+  readonly coconuts: Coconut[] = [];
   private nextLoose = 1;
+  private nextCoconut = 1;
   events: ItemEvent[] = [];
   private nextPeel = 1;
   private readonly rng: Rng;
@@ -96,7 +119,8 @@ export class Items {
   private roll(): Exclude<ItemKind, 'none'> {
     const r = this.rng.next();
     if (r < ITEMS.parrotChance) return 'parrot';
-    return r < ITEMS.parrotChance + ITEMS.snakeChance ? 'snake' : 'banana';
+    if (r < ITEMS.parrotChance + ITEMS.coconutChance) return 'coconut';
+    return r < ITEMS.parrotChance + ITEMS.coconutChance + ITEMS.snakeChance ? 'snake' : 'banana';
   }
 
   /** Give a kart an item directly (tests, debug). */
@@ -131,6 +155,8 @@ export class Items {
       if (!kart || kart.out) return;
       if (canUse) this.use(kart, inputs[kart.index]!, karts);
       this.peelHits(kart, kart.position);
+      // Coconuts fly here too (to be drawn); the host says who they hit.
+      this.flyCoconuts(dt, karts);
       return;
     }
     for (const p of this.pickups) {
@@ -155,6 +181,7 @@ export class Items {
       // A proxy's phone reports its own peel hits (see `claimPeel`).
       if (!kart.proxy) this.peelHits(kart, pos);
     }
+    this.flyCoconuts(dt, karts);
   }
 
   /**
@@ -233,6 +260,12 @@ export class Items {
       this.events.push({ type: 'parrot', kart: kart.index, pos });
       return;
     }
+    if (kart.item === 'coconut') {
+      if (rising(input.whackLeft, prev.whackLeft)) this.throwCoconut(kart, -1);
+      else if (rising(input.whackRight, prev.whackRight)) this.throwCoconut(kart, 1);
+      else if (rising(input.item, prev.item)) this.throwCoconut(kart, this.aim(kart, karts));
+      return;
+    }
     if (kart.item !== 'snake') return;
     let side: -1 | 0 | 1 = 0;
     if (rising(input.whackLeft, prev.whackLeft)) side = -1;
@@ -307,6 +340,135 @@ export class Items {
     const victim = hit.kart;
     Items.whacked(victim, scale(kart.right, side));
     this.events.push({ type: 'whack', kart: kart.index, victim: victim.index, pos: victim.position });
+  }
+
+  /**
+   * Which way to bend a throw from the item button: the way that hits the
+   * nearest kart ahead (see `shot`), else straight.
+   */
+  aim(kart: Kart, karts: readonly Kart[]): -1 | 0 | 1 {
+    return this.shot(kart, karts)?.side ?? 0;
+  }
+
+  /**
+   * Would a coconut thrown now hit anyone? Flies each throw (straight, bent
+   * left, bent right) against every kart carried on along its velocity, and
+   * returns the first that connects — straight preferred — or null.
+   */
+  shot(kart: Kart, karts: readonly Kart[]): { side: -1 | 0 | 1; kart: Kart } | null {
+    const targets = karts.filter((o) => {
+      if (o === kart || o.flying || o.out || o.immune) return false;
+      const rel = sub(o.position, kart.position);
+      const lon = dot(rel, kart.forward);
+      return lon > 0 && lon < ITEMS.coconutRange + 12 && Math.abs(rel.y) < 4;
+    });
+    if (!targets.length) return null;
+    const step = 1 / 60;
+    for (const side of [0, -1, 1] as const) {
+      const f = Items.flight(kart, side);
+      let pos = f.pos;
+      let vel = f.vel;
+      for (let t = step; t <= f.life; t += step) {
+        vel = add(vel, scale(add(f.curve, v3(0, -SIM.gravity, 0)), step));
+        pos = add(pos, scale(vel, step));
+        for (const o of targets) {
+          const rel = sub(pos, add(o.position, scale(o.velocity, t)));
+          if (Items.inReach(o, rel)) return { side, kart: o };
+        }
+      }
+    }
+    return null;
+  }
+
+  /** Is a coconut `rel` from `kart`'s centre inside its hit box? */
+  private static inReach(kart: Kart, rel: Vec3): boolean {
+    return (
+      Math.abs(rel.y) <= ITEMS.coconutHeight &&
+      Math.abs(dot(rel, kart.right)) <= KART.half.x + ITEMS.coconutReach &&
+      Math.abs(dot(rel, kart.forward)) <= KART.half.z + ITEMS.coconutReach
+    );
+  }
+
+  /**
+   * A coconut flung from `kart` toward `side`: from the right hand, forward
+   * at the kart's speed plus `coconutSpeed`, rising a little, with a
+   * sideways pull that bends it `coconutCurve` metres that way by the end of
+   * its range.
+   */
+  private static flight(kart: Kart, side: -1 | 0 | 1): { pos: Vec3; vel: Vec3; curve: Vec3; life: number } {
+    const fwd = kart.forward;
+    const right = kart.right;
+    const flat = normalize(v3(fwd.x, 0, fwd.z));
+    const life = ITEMS.coconutRange / ITEMS.coconutSpeed;
+    const pos = add(add(kart.position, scale(fwd, 1.1)), add(scale(right, 0.45), v3(0, 0.9, 0)));
+    const vel = add(add(kart.velocity, scale(flat, ITEMS.coconutSpeed)), v3(0, ITEMS.coconutLift, 0));
+    const curve = scale(normalize(v3(right.x, 0, right.z)), (side * 2 * ITEMS.coconutCurve) / (life * life));
+    return { pos, vel, curve, life };
+  }
+
+  private throwCoconut(kart: Kart, side: -1 | 0 | 1): void {
+    kart.item = 'none';
+    kart.charges = 0;
+    kart.throwSide = side === 0 ? 1 : side;
+    kart.throwTime = 0;
+    const { pos, vel, curve, life } = Items.flight(kart, side);
+    this.launch(kart.index, pos, vel, curve, life);
+    this.events.push({ type: 'throw', kart: kart.index, side, pos, vel, curve, life });
+  }
+
+  /** Put a thrown coconut in the air (online clients: from the host's `throw` event). */
+  launch(owner: number, pos: Vec3, vel: Vec3, curve: Vec3, life: number): void {
+    this.coconuts.push({ id: this.nextCoconut++, owner, pos, vel, curve, age: 0, life });
+  }
+
+  /**
+   * Move the coconuts, and (with authority) knock any kart one reaches.
+   * Its thrower is never hit; a too-cool or boulder kart bats it away.
+   */
+  private flyCoconuts(dt: number, karts: readonly Kart[]): void {
+    for (let i = this.coconuts.length - 1; i >= 0; i--) {
+      const c = this.coconuts[i]!;
+      c.age += dt;
+      c.vel = add(c.vel, scale(add(c.curve, v3(0, -SIM.gravity, 0)), dt));
+      c.pos = add(c.pos, scale(c.vel, dt));
+      let victim: Kart | null = null;
+      if (this.authority) {
+        for (const kart of karts) {
+          if (kart.index === c.owner || kart.out || kart.flying) continue;
+          if (!Items.inReach(kart, sub(c.pos, kart.position))) continue;
+          victim = kart;
+          break;
+        }
+      }
+      if (victim && !victim.immune) {
+        Items.conked(victim, c.vel);
+        this.events.push({ type: 'conk', kart: c.owner, victim: victim.index, pos: c.pos, vel: c.vel });
+        this.coconuts.splice(i, 1);
+      } else if (victim || c.age >= c.life) {
+        // Batted away by an immune kart, or out of range: it drops.
+        this.coconuts.splice(i, 1);
+        this.events.push({ type: 'coconutDrop', kart: c.owner, pos: c.pos, vel: victim ? scale(c.vel, -0.3) : c.vel });
+      }
+    }
+  }
+
+  /** The host says one of `owner`'s coconuts hit someone: it is gone here too. */
+  dropCoconut(owner: number): void {
+    const i = this.coconuts.findIndex((c) => c.owner === owner);
+    if (i >= 0) this.coconuts.splice(i, 1);
+  }
+
+  /**
+   * A coconut connects: half the speed gone, a wobble, a short slowdown, and
+   * a shove the way it was flying. Shared with the online client.
+   */
+  static conked(victim: Kart, flight: Vec3): void {
+    const v = victim.velocity;
+    victim.body.setLinvel(v3(v.x * ITEMS.coconutKeep, v.y, v.z * ITEMS.coconutKeep), true);
+    victim.wobbleTime = Math.max(victim.wobbleTime, ITEMS.coconutWobble);
+    victim.slowTime = Math.max(victim.slowTime, ITEMS.coconutSlow);
+    victim.boostTime = Math.min(victim.boostTime, victim.noBrakesTime);
+    victim.body.applyImpulse(scale(normalize(v3(flight.x, 0, flight.z)), ITEMS.coconutShove), true);
   }
 
   private peelHits(kart: Kart, pos: Vec3): void {

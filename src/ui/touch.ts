@@ -113,6 +113,15 @@ export class TouchControls implements InputSource {
     return matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
   }
 
+  /** The attack buttons fling a coconut when you hold one, and swing the snake otherwise. */
+  setItem(kind: string): void {
+    const icon = kind === 'coconut' ? '🥥' : '🐍';
+    if (this.root.dataset.attack === icon) return;
+    this.root.dataset.attack = icon;
+    this.root.querySelector('.tb-wl')!.textContent = `${icon}◀`;
+    this.root.querySelector('.tb-wr')!.textContent = `▶${icon}`;
+  }
+
   /** The ★ button only shows when the swagger meter is full. */
   setSwaggerReady(ready: boolean): void {
     this.root.querySelector<HTMLElement>('.tb-swagger')!.classList.toggle('ready', ready);
