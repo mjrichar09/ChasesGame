@@ -10,6 +10,7 @@ slide into the logs.
 - **Vine Valley** — sunny and fast: a broad start straight, a single-file squeeze through the ferns, and a river gap to clear.
 - **Canopy Creek** — deep under a full jungle canopy; tight turns, narrow hairpins and a creek to ford twice (the first ford is wide — pick your line).
 - **Treetop Tangle** — thirty metres up along the tops of giant branches; broad boughs, a tightrope branch, tree-to-tree leaps and no railing on the bare stretches.
+- **Coconut Cove** — climb a jungle ridge, drop off it onto three treetop platforms in a row, each one lower than the last, then swoop down a headland onto the beach and race round a sandy cove with waves washing over the road.
 - **Lava Run** — the volcano is erupting: race point to point from the broad crater rim, along narrow ledges, down to the village with the lava
   chasing you. It is a little slower than a clean run and much faster than a crash. Caught is out.
 
@@ -47,8 +48,10 @@ npm run dev        # http://localhost:5174
 ## Items
 - **Banana** (floats over a yellow ring): one per pickup — drive through more to
   stack up to three. Each is a 3 s
-  boost and drops a peel behind you. Peels stay until someone hits one.
-- **Snake** (green ring): three swings, left or right, at whoever is alongside.
+  boost and drops a peel behind you. Brake (or hit a wall) to call a boost off.
+  Peels stay until someone hits one, and spin you toward the side they were on.
+- **Snake** (purple ring): three swings, left or right, at whoever is alongside —
+  a hit takes most of their speed, fishtails them and slows them for a couple of seconds.
 - **Parrot** (blue ring): a giant macaw carries you for 6 s. Steer and set the pace;
   fly over peels and snakes, or cut straight across the infield to a later part of the lap.
 - One item at a time — a full hand drives straight through pickups.
@@ -60,12 +63,12 @@ gorilla's signature move:
 
 | Gorilla | Move |
 |---|---|
-| Big Boris | **Roar** — karts nearby wobble and drop their bananas |
+| Big Boris | **Roar** — karts within 20 m are blasted back, fishtail and drop their bananas |
 | Koko Loco | **No Brakes** — boost with grip to spare and no wall penalty |
 | Professor Tumbles | **Slow Clap** — karts just ahead lose 30% pace |
 | Mama Mango | **Feed the Troop** — leaves bananas on the road, refills her hands |
 | Tiny Tank | **Pogo** — a huge bounce over gaps, peels and rivals |
-| DJ Banana | **Drop the Beat** — rivals' steering swaps for 1.5 s |
+| DJ Banana | **Drop the Beat** — rivals' steering swaps for 3 s |
 | Smooth Steve | **Too Cool** — 3 s immune to everything, lava included |
 | Granite Gus | **Boulder** — a heavy rolling rock that shoves karts aside |
 

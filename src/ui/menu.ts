@@ -111,7 +111,8 @@ export class Menu {
         <div class="cards">${cards}</div>
         <div class="select-foot">
           <div class="keys">
-            <b>Drive</b> W/S or ↑↓ · <b>Steer</b> A/D or ←→ · <b>Banana / item</b> Space · <b>Whack</b> Q / E · <b>Swagger</b> hold F · <b>Look back</b> C · <b>Pause</b> Esc
+            <b>Drive</b> W/S or ↑↓ · <b>Steer</b> A/D or ←→ · <b>Banana / item</b> Space · <b>Whack</b> Q / E · <b>Swagger</b> hold F · <b>Look back</b> C · <b>Pause</b> Esc<br>
+            <b>Controller</b> RT/LT drive · A item · <b>LB / RB snake swing</b> · hold X swagger · Y look back
           </div>
           <div class="difficulty swagger-toggle" role="radiogroup" aria-label="Swagger">
             <span>Swagger</span>

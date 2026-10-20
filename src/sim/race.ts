@@ -555,6 +555,8 @@ export class RaceSim {
     if (closing < KART.bonkSpeed) return;
     kart.body.setLinvel(v3(v.x * KART.bonkKeep, v.y, v.z * KART.bonkKeep), true);
     kart.wobbleTime = Math.max(kart.wobbleTime, 0.4);
+    // A banana boost ends at the logs, or it holds the kart pinned against them.
+    kart.boostTime = 0;
     pr.bonkCooldown = 0.6;
     this.items.events.push({ type: 'bonk', kart: kart.index, pos: kart.position, strength: Math.min(1, closing / 12) });
   }
@@ -568,6 +570,10 @@ export class RaceSim {
   respawn(kart: Kart): void {
     const pr = this.progress[kart.index]!;
     let s = pr.safeS - 3;
+    // Never right at the far edge of a gap or a terrace ledge: a kart put down
+    // there hangs its tail over the drop, tips back off and respawns there
+    // again, forever.
+    for (const g of this.track.gaps) if (this.track.between(s, g.s0 - 2, g.s1 + 5)) s = g.s1 + 5;
     // Nowhere safe left to put it: the lava already has the spot.
     if (s < this.lavaS + 6) {
       this.toast(kart);

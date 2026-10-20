@@ -8,14 +8,15 @@
  * pogo off landings and wallow through corners.
  *
  * Status effects from items live here because they change how the kart
- * drives: boost (more force, higher top speed), spin-out (no drive, low grip,
- * a scripted pirouette) and wobble (a whacked kart's steering shakes).
+ * drives: boost (more force, higher top speed; braking ends it), spin-out (no
+ * drive, low grip, a scripted pirouette one way or the other) and wobble (a
+ * whacked kart's steering shakes and its tail fishtails).
  */
 
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { ITEMS, KART, PARROT, SIM, WATER } from '../data/tuning.js';
 import { TREE } from './events.js';
-import type { Move } from './swagger.js';
+import { type Move, SWAGGER } from './swagger.js';
 import type { DriverInput } from './input.js';
 import { NEUTRAL_INPUT } from './input.js';
 import {
@@ -95,6 +96,8 @@ export class Kart {
   charges = 0;
   boostTime = 0;
   spinTime = 0;
+  /** Which way a spin-out turns: +1 = nose to the left (counter-clockwise from above), -1 = right. */
+  spinDir: -1 | 1 = 1;
   wobbleTime = 0;
   /** Seconds since a swing started, and which side; side 0 = not swinging. */
   swingSide: -1 | 0 | 1 = 0;
@@ -372,8 +375,17 @@ export class Kart {
     this.prevInput = { ...raw };
   }
 
+  /**
+   * Standing on the brake ends a banana boost (not No Brakes — that's the
+   * point of it), so a boost aimed at the logs can be called off.
+   */
+  private brakeBoost(raw: DriverInput): void {
+    if (this.boostTime > 0 && this.noBrakesTime <= 0 && raw.brake > ITEMS.boostCancelBrake) this.boostTime = 0;
+  }
+
   /** Advance one fixed step. Call before `world.step()`. */
   step(dt: number, raw: DriverInput): void {
+    this.brakeBoost(raw);
     const input = this.effectiveInput(raw);
     this.applied = input;
     this.tick(dt);
@@ -427,14 +439,17 @@ export class Kart {
     const speed = dot(vel, fwd);
     const boost = this.boostTime > 0;
     // Slow-clapped karts lose a chunk of engine and top speed.
-    const slowed = this.slowTime > 0 ? 0.7 : 1;
+    const slowed = this.slowTime > 0 ? ITEMS.slowPower : 1;
     const top = KART.topSpeed * this.power * slowed * (boost ? ITEMS.boostTopSpeed : 1);
     const mass = KART.mass;
 
     // Steering eases toward its target, with less lock at speed.
     const speedFrac = clamp(Math.abs(speed) / KART.topSpeed, 0, 1);
-    const lock = lerp(KART.steerLow, KART.steerHigh, speedFrac);
-    this.steerAngle = moveToward(this.steerAngle, input.steer * lock, KART.steerRate * dt);
+    // No Brakes turns in like a kart at normal pace — more lock, quicker hands —
+    // so the whole boost can be steered round corners instead of into the logs.
+    const nb = this.noBrakesTime > 0;
+    const lock = lerp(KART.steerLow, KART.steerHigh, speedFrac) * (nb ? SWAGGER.noBrakesSteer : 1);
+    this.steerAngle = moveToward(this.steerAngle, input.steer * lock, KART.steerRate * (nb ? 1.6 : 1) * dt);
 
     const staticLoad = (mass * SIM.gravity) / 4;
     const rayLen = KART.restLength + KART.wheelRadius;
@@ -499,7 +514,7 @@ export class Kart {
       const load = Math.max(c.load, staticLoad * 0.35);
       const grip =
         KART.gripMu * load * (w.front ? 1 : KART.rearGrip) * (spinning ? 0.25 : 1) * (this.wet && !this.skimming ? WATER.grip : 1) *
-        (this.brush && this.boulderTime <= 0 ? TREE.grip : 1) * (this.noBrakesTime > 0 ? 1.5 : 1);
+        (this.brush && this.boulderTime <= 0 ? TREE.grip : 1) * (nb ? SWAGGER.noBrakesGrip : 1);
       // A tyre that has broken away grips less than one that hasn't: past the
       // limit the force falls toward `slideGrip`. That is what makes a corner
       // taken too fast run wide into the logs instead of scrubbing off speed
@@ -553,11 +568,16 @@ export class Kart {
 
     if (spinning) {
       // A scripted pirouette: whole turns, so the kart ends facing where it was.
-      const rate = (ITEMS.spinTurns * 2 * Math.PI) / ITEMS.spinTime;
+      const rate = (this.spinDir * ITEMS.spinTurns * 2 * Math.PI) / ITEMS.spinTime;
       const w = body.angvel();
       body.setAngvel(v3(w.x, rate, w.z), true);
     } else if (grounded === 0) {
       this.airControl(dt, input, up, fwd, angvel);
+    } else if (this.wobbleTime > 0 && !this.immune) {
+      // Fishtail: the tail swings side to side, hardest at the start of the wobble.
+      const fade = Math.min(1, this.wobbleTime / 0.6);
+      const yaw = Math.sin(this.wobbleTime * 14) * KART.wobbleYaw * fade * clamp(Math.abs(speed) / 8, 0.3, 1);
+      body.applyTorqueImpulse(scale(up, yaw * dt), true);
     }
 
     this.checkFlipped(dt, up, v2);

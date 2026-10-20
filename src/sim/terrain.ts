@@ -5,7 +5,9 @@
  * own height function; near it, it eases into a shelf just under the road, so
  * the road reads as cut into the mountain (or built up on it) with no cliff
  * and no seam. The same grid is the physics ground and the drawn ground, and
- * `heightAt` lets the renderer stand huts and trees on it.
+ * `heightAt` lets the renderer stand huts and trees on it. Under terrace
+ * platforms (`Track.aloft`) the ground keeps to its own height, well below
+ * the road, so the platforms stand up in the air.
  */
 
 import type { Track } from './track.js';
@@ -56,6 +58,7 @@ export function buildTerrain(track: Track): Terrain | null {
       let roadY = 0;
       let hw = 6;
       let onRoad = true;
+      let nearS = 0;
       for (const s of road) {
         const d = (s.p.x - x) ** 2 + (s.p.z - z) ** 2;
         if (d < best) {
@@ -63,10 +66,15 @@ export function buildTerrain(track: Track): Terrain | null {
           roadY = s.p.y;
           hw = s.halfWidth;
           onRoad = s.road;
+          nearS = s.s;
         }
       }
       const d = Math.sqrt(best);
       const natural = def.height(x, z);
+      if (track.aloft(nearS)) {
+        heights[iz * nx + ix] = Math.min(natural, roadY - 9);
+        continue;
+      }
       // A shelf just under the road out to the barriers, easing into the mountain.
       // Under a gap in the road the ground falls away into a deep fissure.
       const shelf = onRoad ? roadY - 0.7 : roadY - 12;

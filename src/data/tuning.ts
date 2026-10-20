@@ -73,6 +73,8 @@ export const KART = {
    */
   bonkSpeed: 4,
   bonkKeep: 0.55,
+  /** Yaw torque that fishtails a wobbling kart (whacked, roared at, bonked), N·m. */
+  wobbleYaw: 3200,
   /** Seconds upside-down (or stuck) before the kart is set back on its wheels. */
   flipDelay: 1.4,
 } as const;
@@ -103,6 +105,11 @@ export const ITEMS = {
   boostTime: 3,
   boostForce: 1.9,
   boostTopSpeed: 1.42,
+  /**
+   * Braking (past this much pedal) ends a banana boost early, and so does
+   * bonking a wall while boosting — or a boost pins you to the logs.
+   */
+  boostCancelBrake: 0.3,
   /** Bananas come one per pickup and stack up to this many. */
   maxBananas: 3,
 
@@ -117,14 +124,18 @@ export const ITEMS = {
   snakeSwings: 3,
   swingTime: 0.35,
   swingCooldown: 0.45,
-  /** Hit box beside the attacker: lateral min..max, and ± along the kart. */
+  /** Hit box beside the attacker: lateral min..max, ± along the kart, and ± height. */
   whackLateralMin: 0.4,
-  whackLateralMax: 3.4,
-  whackLong: 2.3,
-  /** Fraction of speed kept by a whacked kart. */
-  whackKeep: 0.6,
-  wobbleTime: 0.9,
-  whackShove: 900,
+  whackLateralMax: 4.6,
+  whackLong: 3.4,
+  whackHeight: 2.5,
+  /** Fraction of speed kept by a whacked kart, then how long it wobbles and stays slowed. */
+  whackKeep: 0.35,
+  wobbleTime: 1.8,
+  whackSlow: 2.2,
+  whackShove: 1300,
+  /** Engine and top-speed multiplier while slowed (snake whack, Slow Clap). */
+  slowPower: 0.55,
 
   pickupRadius: 1.9,
   /** Respawned pickups roll parrot, then snake, then bananas. */

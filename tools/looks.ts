@@ -3,7 +3,7 @@
 import { chromium } from '@playwright/test';
 const tag = process.argv[2] ?? 'look';
 const b = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
-for (const track of [0, 1, 2, 3]) {
+for (const track of [0, 1, 2, 3, 4]) {
   const p = await b.newPage({ viewport: { width: 1280, height: 720 } });
   await p.goto('http://localhost:5174/?autopilot');
   await p.click('.go');

@@ -50,6 +50,8 @@ export interface PropLook {
   scenery: number;
   canopy?: boolean;
   branches?: boolean;
+  /** Nothing grows where the ground is lower than this (under the sea). */
+  shoreline?: number;
 }
 
 const COUNTS: Record<SceneryKind, number> = { palm: 260, tree: 200, fern: 500, bush: 300, rock: 120, flower: 260 };
@@ -60,13 +62,13 @@ const BANDS: Record<SceneryKind, [number, number]> = {
 
 export function buildProps(track: Track, look: PropLook, heightAt: (x: number, z: number) => number): Props {
   return {
-    scenery: look.scenery > 0 ? scenery(track, look.scenery, heightAt) : { palm: [], tree: [], fern: [], bush: [], rock: [], flower: [] },
+    scenery: look.scenery > 0 ? scenery(track, look.scenery, heightAt, look.shoreline ?? -Infinity) : { palm: [], tree: [], fern: [], bush: [], rock: [], flower: [] },
     canopyTrunks: look.canopy ? canopyTrunks(track) : [],
     giants: look.branches ? giants(track) : [],
   };
 }
 
-function scenery(track: Track, density: number, heightAt: (x: number, z: number) => number): Record<SceneryKind, Placement[]> {
+function scenery(track: Track, density: number, heightAt: (x: number, z: number) => number, shoreline: number): Record<SceneryKind, Placement[]> {
   const rng = new Rng(77);
   const out = {} as Record<SceneryKind, Placement[]>;
   for (const kind of Object.keys(COUNTS) as SceneryKind[]) {
@@ -86,7 +88,7 @@ function scenery(track: Track, density: number, heightAt: (x: number, z: number)
       const scale = rng.range(0.75, 1.3);
       const y = heightAt(p.x, p.z);
       // Nothing grows on the bare rock and ash near a summit.
-      if (y > 70) continue;
+      if (y > 70 || y < shoreline) continue;
       list.push({ x: p.x, y, z: p.z, yaw: rng.range(0, Math.PI * 2), scale, sy: 1 });
     }
     out[kind] = list;

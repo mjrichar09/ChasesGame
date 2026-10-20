@@ -15,7 +15,7 @@ import type { EventState } from '../sim/events.js';
 import { TREE } from '../sim/events.js';
 import { buildTerrain, terrainHeight } from '../sim/terrain.js';
 import { type Placement, type Props, type SceneryKind, buildProps } from '../sim/props.js';
-import { type VolcanoView, buildVolcanoView } from './volcanoView.js';
+import { type VolcanoView, buildVolcanoView, ocean, terrainMesh } from './volcanoView.js';
 import { type Sky, roadsideTufts, skyDressing } from './polish.js';
 import { BRANCH_N, type Track, WALL_HEIGHT, WALL_SOLID_HEIGHT, WALL_THICK, type Water, branchProfile } from '../sim/track.js';
 import { GEO, PartBuilder, toon } from './toon.js';
@@ -141,9 +141,12 @@ export function buildTrackView(track: Track, look: TrackLook): TrackView {
   // Shaped ground (a volcano) replaces the flat jungle floor.
   const terrain = buildTerrain(track);
   let volcano: VolcanoView | null = null;
-  if (terrain) {
+  if (terrain && track.def.lava) {
     volcano = buildVolcanoView(track, terrain);
     group.add(volcano.group);
+  } else if (terrain) {
+    // A coast: sandy shores, jungle hills, the sea.
+    group.add(terrainMesh(terrain, coastColour), ocean(terrain));
   } else group.add(ground(look.ground));
   const heightAt = (x: number, z: number) => {
     if (!terrain) return -0.5;
@@ -156,6 +159,7 @@ export function buildTrackView(track: Track, look: TrackLook): TrackView {
   group.add(barriers);
   for (const k of kickerMeshes(track)) group.add(k);
   if (look.branches) group.add(branchesAndTrees(track, props));
+  if (track.terraces.length) group.add(treetops(track, heightAt));
   // Mid-race events: each builds its own pieces and animates from the sim's state.
   const eventViews = (track.def.events ?? []).map((def, i) => {
     if (def.kind === 'treefall') return fallingTree(track, def);
@@ -203,6 +207,148 @@ export function buildTrackView(track: Track, look: TrackLook): TrackView {
       }
     },
   };
+}
+
+/** Coast colours by height: wet sand, dry sand, jungle green, darker up the hills. */
+function coastColour(y: number, c: THREE.Color): void {
+  const wet = new THREE.Color(0xc4a96e);
+  const sand = new THREE.Color(0xecd9a0);
+  const green = new THREE.Color(0x4f8a34);
+  const hill = new THREE.Color(0x3c6e2a);
+  if (y < 0.4) c.copy(wet);
+  else if (y < 2.2) c.copy(wet).lerp(sand, (y - 0.4) / 1.8);
+  else if (y < 4) c.copy(sand).lerp(green, (y - 2.2) / 1.8);
+  else c.copy(green).lerp(hill, Math.min(1, (y - 4) / 30));
+}
+
+/**
+ * Terrace platforms as the tops of giant trees: a plank deck on each, set
+ * into a dome of leaves with clumps bulging up along its edges, and a trunk
+ * down to the valley floor. More giants stand around the valley, their
+ * crowns at all heights, so the platforms read as the tallest of a forest.
+ */
+function treetops(track: Track, heightAt: (x: number, z: number) => number): THREE.Group {
+  const g = new THREE.Group();
+  const rng = new Rng(43);
+  const crown = new THREE.IcosahedronGeometry(1, 1);
+  const leafMats = [toon(0x2f7d2a), toon(0x3f9a34), toon(0x4fae3a)];
+  const leaves: THREE.Matrix4[][] = [[], [], []];
+  const trunkGeo = new THREE.CylinderGeometry(0.75, 1, 1, 12);
+  trunkGeo.translate(0, 0.5, 0);
+  const trunks: THREE.Matrix4[] = [];
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const leaf = (x: number, y: number, z: number, r: number, sy: number) => {
+    q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rng.range(0, Math.PI * 2));
+    m.compose(new THREE.Vector3(x, y, z), q, new THREE.Vector3(r, sy, r));
+    leaves[Math.floor(rng.next() * 3)]!.push(m.clone());
+  };
+  const trunk = (x: number, z: number, top: number, r: number) => {
+    const y0 = heightAt(x, z) - 1;
+    m.compose(new THREE.Vector3(x, y0, z), new THREE.Quaternion(), new THREE.Vector3(r, Math.max(1, top - y0), r));
+    trunks.push(m.clone());
+  };
+
+  // Plank decks: boards across the road, overlaid on each platform.
+  const deckTex = canvasTexture(128, 128, (c) => {
+    c.fillStyle = '#a0703f';
+    c.fillRect(0, 0, 128, 128);
+    for (let y = 0; y < 128; y += 16) {
+      c.fillStyle = y % 32 ? '#8f6234' : '#a97a47';
+      c.fillRect(0, y, 128, 14);
+      c.fillStyle = '#5c3b1c';
+      c.fillRect(0, y + 14, 128, 2);
+    }
+  });
+  const pos: number[] = [];
+  const uv: number[] = [];
+  const idx: number[] = [];
+  for (const run of track.terraces) {
+    for (const [a, b] of run.platforms) {
+      const len = track.wrap(b - a);
+      const first = pos.length / 3;
+      for (let d = 0; d <= len; d += 1) {
+        const k = track.at(a + Math.min(d, len - 0.01));
+        const hw = k.halfWidth + WALL_THICK;
+        for (const side of [-1, 1]) {
+          const p = add3(k.p, k.r, hw * side);
+          pos.push(p.x, p.y + 0.04, p.z);
+          uv.push(side < 0 ? 0 : hw / 4, d / 4);
+        }
+        if (d > 0) {
+          const i0 = first + (d - 1) * 2;
+          idx.push(i0, i0 + 1, i0 + 2, i0 + 1, i0 + 3, i0 + 2);
+        }
+      }
+      // The tree under it: a dome of leaves under the deck, clumps along the
+      // edges, a fringe hanging off the ledge, and the trunk.
+      const mid = track.at(a + len / 2);
+      for (let d = 0; d <= len; d += 5) {
+        const k = track.at(a + d);
+        for (const f of [-0.6, 0, 0.6]) {
+          const p = add3(k.p, k.r, k.halfWidth * f);
+          leaf(p.x, p.y - 4.2, p.z, rng.range(6, 8), rng.range(3.2, 3.6));
+        }
+        for (const side of [-1, 1]) {
+          const p = add3(k.p, k.r, side * (k.halfWidth + WALL_THICK + rng.range(3.2, 4.2)));
+          leaf(p.x, p.y - rng.range(1.6, 2.4), p.z, rng.range(4, 5.2), rng.range(2.4, 3));
+        }
+      }
+      for (const end of [a, b]) {
+        const k = track.at(end);
+        const p = add3(k.p, k.t, end === a ? 3 : -3);
+        leaf(p.x, p.y - 6, p.z, rng.range(8, 10), 5);
+      }
+      trunk(mid.p.x, mid.p.z, mid.p.y - 6, rng.range(2.6, 3.2));
+    }
+  }
+  const deckGeo = new THREE.BufferGeometry();
+  deckGeo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  deckGeo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  deckGeo.setIndex(idx);
+  deckGeo.computeVertexNormals();
+  deckTex.wrapS = deckTex.wrapT = THREE.RepeatWrapping;
+  const deck = new THREE.Mesh(deckGeo, new THREE.MeshToonMaterial({ map: deckTex, gradientMap: toon(0).gradientMap }));
+  deck.receiveShadow = true;
+  g.add(deck);
+
+  // The rest of the forest in the valley: giants with crowns at all heights,
+  // kept clear of the road so nothing hangs over it.
+  for (const run of track.terraces) {
+    const span = track.wrap(run.s1 - run.s0);
+    for (let i = 0; i < 40; i++) {
+      const s = run.s0 + rng.range(-20, span + 20);
+      const k = track.at(s);
+      const side = rng.next() < 0.5 ? -1 : 1;
+      const p = add3(k.p, k.r, side * (k.halfWidth + rng.range(16, 70)));
+      const near = track.project({ x: p.x, y: p.y, z: p.z });
+      if (Math.abs(near.lateral) < track.at(near.s).halfWidth + 14) continue;
+      const top = k.p.y - rng.range(3, 14);
+      trunk(p.x, p.z, top, rng.range(1.6, 2.6));
+      for (let c = 0; c < 4; c++) {
+        const a = rng.range(0, Math.PI * 2);
+        const d = rng.range(0, 6);
+        leaf(p.x + Math.cos(a) * d, top + rng.range(-1, 2.5), p.z + Math.sin(a) * d, rng.range(5, 8), rng.range(3, 4.5));
+      }
+    }
+  }
+
+  const trunkMesh = new THREE.InstancedMesh(trunkGeo, toon(0x5b4330), trunks.length);
+  trunks.forEach((tm, i) => trunkMesh.setMatrixAt(i, tm));
+  trunkMesh.castShadow = true;
+  g.add(trunkMesh);
+  leaves.forEach((list, i) => {
+    const inst = new THREE.InstancedMesh(crown, leafMats[i]!, list.length);
+    list.forEach((lm, j) => inst.setMatrixAt(j, lm));
+    inst.castShadow = true;
+    g.add(inst);
+  });
+  return g;
+}
+
+/** p + dir * k, for building from track samples. */
+function add3(p: { x: number; y: number; z: number }, dir: { x: number; y: number; z: number }, k: number): THREE.Vector3 {
+  return new THREE.Vector3(p.x + dir.x * k, p.y + dir.y * k, p.z + dir.z * k);
 }
 
 /** Road surface with UVs: u across the road, v along it. */
@@ -327,15 +473,17 @@ function walls(track: Track): THREE.Group {
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const rng = new Rng(21);
-  // The collider is taller than the log; sit the log at the bottom of it.
-  const drop = (WALL_SOLID_HEIGHT - WALL_HEIGHT) / 2;
+  // The collider is taller than the log (taller still up on terraces); sit
+  // the log at the bottom of it.
+  const lift = WALL_SOLID_HEIGHT / 2 + 0.15 - (WALL_SOLID_HEIGHT - WALL_HEIGHT) / 2;
   track.walls.forEach((w, i) => {
     q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), w.yaw);
     const s = 0.9 + rng.next() * 0.2;
-    m.compose(new THREE.Vector3(w.center.x, w.center.y - drop - 0.1, w.center.z), q, new THREE.Vector3(s, s * 0.9, w.half.z * 2));
+    const base = w.center.y - w.half.y + lift;
+    m.compose(new THREE.Vector3(w.center.x, base - 0.1, w.center.z), q, new THREE.Vector3(s, s * 0.9, w.half.z * 2));
     logs.setMatrixAt(i, m);
     const off = new THREE.Vector3(0, 0, w.half.z).applyQuaternion(q);
-    m.compose(new THREE.Vector3(w.center.x + off.x, w.center.y - drop + 0.1, w.center.z + off.z), q, new THREE.Vector3(1, 1, 1));
+    m.compose(new THREE.Vector3(w.center.x + off.x, base + 0.1, w.center.z + off.z), q, new THREE.Vector3(1, 1, 1));
     stakes.setMatrixAt(i, m);
   });
   logs.castShadow = true;

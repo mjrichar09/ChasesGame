@@ -127,6 +127,23 @@ describe('bananas', () => {
     expect(kart.boostTime).toBe(0);
   });
 
+  it('braking calls off a banana boost (but not No Brakes)', () => {
+    const sim = racing(1);
+    putAt(sim, 0, 120, 0);
+    settle(sim, 30);
+    const kart = sim.karts[0]!;
+    Items.give(kart, 'banana');
+    sim.step([press({ item: true })]);
+    settle(sim, 30, [press({ throttle: 1 })]);
+    expect(kart.boosting).toBe(true);
+    sim.step([press({ brake: 1 })]);
+    expect(kart.boosting).toBe(false);
+    kart.noBrakesTime = 2;
+    kart.boostTime = 2;
+    sim.step([press({ brake: 1 })]);
+    expect(kart.boosting).toBe(true);
+  });
+
   it('peels have no timer — they stay until hit', () => {
     const sim = racing(1);
     putAt(sim, 0, 120, 0);
@@ -155,6 +172,24 @@ describe('bananas', () => {
     }
     expect(spun).toBe(true);
     expect(sim.items.peels).toHaveLength(0);
+  });
+
+  it('spins you toward the side the peel was on', () => {
+    for (const side of [1, -1] as const) {
+      const sim = racing(2);
+      putAt(sim, 0, 140, 0);
+      putAt(sim, 1, 300, 0);
+      settle(sim, 30);
+      const me = sim.karts[0]!;
+      // Ahead, under the right (side 1) or left (-1) wheels.
+      const at = add(add(add(me.position, scale(me.forward, 6)), scale(me.right, side * 0.7)), v3(0, -0.4, 0));
+      sim.items.peels.push({ id: 99, pos: at, yaw: 0, owner: 1, age: 10 });
+      for (let i = 0; i < 240 && !me.spinning; i++) sim.step([press({ throttle: 1 })]);
+      expect(me.spinning).toBe(true);
+      sim.step([press({})]);
+      // + yaw rate turns the nose left (local +X), so a right-side peel spins it negative.
+      expect(Math.sign(me.body.angvel().y)).toBe(-side);
+    }
   });
 
   it('caps the track at maxPeels by dropping the oldest', () => {
@@ -195,6 +230,18 @@ describe('snake', () => {
     sim.step([press({ whackRight: true }), press({})]);
     expect(them.wobbleTime).toBeGreaterThan(0);
     expect(Math.hypot(them.velocity.x, them.velocity.z)).toBeLessThan(before * 0.75);
+  });
+
+  it('reaches a kart a full lane over, and leaves it slowed and wobbling', () => {
+    const sim = racing(2);
+    putAt(sim, 0, 140, -2.2);
+    putAt(sim, 1, 140, 2.2);
+    settle(sim, 40);
+    const [me, them] = sim.karts as [typeof sim.karts[0], typeof sim.karts[0]];
+    Items.give(me, 'snake');
+    sim.step([press({ whackRight: true }), press({})]);
+    expect(them.wobbleTime).toBeGreaterThan(1);
+    expect(them.slowTime).toBeGreaterThan(1);
   });
 
   it('gives exactly three swings', () => {

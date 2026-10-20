@@ -11,7 +11,7 @@
 import { ITEMS } from '../data/tuning.js';
 import type { DriverInput } from './input.js';
 import type { Kart } from './kart.js';
-import { add, dot, length, scale, sub, v3 } from './math.js';
+import { type Vec3, add, dot, length, scale, sub, v3 } from './math.js';
 import type { RaceSim } from './race.js';
 
 export type Move = 'roar' | 'noBrakes' | 'slowClap' | 'feed' | 'pogo' | 'beat' | 'tooCool' | 'boulder';
@@ -32,14 +32,14 @@ export const MOVE_NAMES: Record<Move, string> = {
 
 /** One line on what each move does, for the select screen. */
 export const MOVE_INFO: Record<Move, string> = {
-  roar: 'Karts within 12 m wobble and drop their bananas as peels. Airborne karts are safe.',
-  noBrakes: '2.5 s of boost with extra grip — wall hits don’t slow you.',
-  slowClap: 'Karts up to 25 m ahead lose 30% of their pace for 2 s.',
-  feed: 'Leaves 3 bananas on the road behind you and fills your hands with a full stack.',
-  pogo: 'A huge 4 m bounce — over gaps, peels and rivals.',
-  beat: 'Rivals within 30 m get swapped steering (left is right) for 1.5 s.',
-  tooCool: '3 s immune to everything — peels, whacks, walls, even lava. Karts that touch you get shoved aside.',
-  boulder: '2.5 s as a heavy rolling rock: bowls karts aside and flattens fallen branches.',
+  roar: 'Karts within 20 m are blasted back, lose speed, fishtail and drop their bananas as peels. Airborne karts are safe.',
+  noBrakes: '4 s of boost with sharp steering and huge grip — wall hits don’t slow you.',
+  slowClap: 'Karts up to 45 m ahead lose 45% of their pace for 3.5 s.',
+  feed: 'Leaves 5 bananas on the road behind you and fills your hands with a full stack.',
+  pogo: 'A huge 6 m bounce — over gaps, peels and rivals.',
+  beat: 'Rivals within 45 m get swapped steering (left is right) for 3 s.',
+  tooCool: '5 s immune to everything — peels, whacks, walls, even lava. Karts within 4 m get shoved aside.',
+  boulder: '4 s as a heavy rolling rock: bowls karts within 4 m aside and flattens fallen branches.',
 };
 
 export const SWAGGER = {
@@ -65,23 +65,28 @@ export const SWAGGER = {
   hold: 0.3,
   windup: 0.35,
   // Moves.
-  roarRadius: 12,
-  roarWobble: 1.2,
-  noBrakesTime: 2.5,
-  noBrakesGrip: 1.5,
-  clapRange: 25,
-  clapTime: 2,
-  clapPower: 0.7,
-  feedBananas: 3,
+  roarRadius: 20,
+  roarWobble: 2.2,
+  /** Roar: fraction of speed kept, and the outward blast (impulse, N·s) at point-blank range. */
+  roarKeep: 0.6,
+  roarBlast: 1400,
+  noBrakesTime: 4,
+  /** No Brakes: tyre grip and steering lock multipliers (read by the kart). */
+  noBrakesGrip: 2.8,
+  noBrakesSteer: 2.1,
+  /** Slow Clap's pace loss is `ITEMS.slowPower`. */
+  clapRange: 45,
+  clapTime: 3.5,
+  feedBananas: 5,
   feedTtl: 20,
-  pogoHeight: 4,
-  beatRadius: 30,
-  beatTime: 1.5,
-  coolTime: 3,
-  boulderTime: 2.5,
-  boulderMass: 3,
-  shoveRadius: 2.4,
-  shove: 2600,
+  pogoHeight: 6,
+  beatRadius: 45,
+  beatTime: 3,
+  coolTime: 5,
+  boulderTime: 4,
+  boulderMass: 4,
+  shoveRadius: 4,
+  shove: 4200,
 } as const;
 
 /** Per-kart bookkeeping the race keeps for earning swagger. */
@@ -259,10 +264,13 @@ function fire(sim: RaceSim, kart: Kart): void {
   const self = sim.role === 'client';
   switch (self && !SELF_MOVES.includes(kart.move) ? null : kart.move) {
     case 'roar':
-      // Everyone close and on the ground wobbles, and drops any bananas as peels.
+      // Everyone close and on the ground is blasted back, loses speed,
+      // fishtails, and drops any bananas as peels.
       for (const o of near(S.roarRadius)) {
         if (o.grounded === 0 || o.immune) continue;
         o.wobbleTime = Math.max(o.wobbleTime, S.roarWobble);
+        // A proxy's own phone feels the blast (net/client.ts).
+        if (!o.proxy) roared(o, pos);
         if (o.item === 'banana') {
           for (let i = 0; i < o.charges; i++) sim.items.dropPeel(o, i * 1.6);
           o.item = 'none';
@@ -290,7 +298,7 @@ function fire(sim: RaceSim, kart: Kart): void {
       // Three bananas left behind as pickups — and her own hands refilled.
       const f = kart.forward;
       for (let i = 0; i < S.feedBananas; i++) {
-        const at = add(pos, add(scale(f, -4 - i * 2.2), scale(kart.right, (i - 1) * 2)));
+        const at = add(pos, add(scale(f, -4 - i * 2.2), scale(kart.right, (i % 3 - 1) * 2)));
         sim.items.addLoose(at, S.feedTtl);
       }
       if (kart.item === 'none' || kart.item === 'banana') {
@@ -320,6 +328,20 @@ function fire(sim: RaceSim, kart: Kart): void {
       break;
   }
   sim.items.events.push({ type: 'swagger', kart: kart.index, move: kart.move, pos, phase: 'hit', victims });
+}
+
+/**
+ * The physical half of a roar on one kart: speed knocked off and a blast
+ * outward from `from`, strongest up close. Shared with the online client.
+ */
+export function roared(o: Kart, from: Vec3): void {
+  const S = SWAGGER;
+  const v = o.velocity;
+  o.body.setLinvel(v3(v.x * S.roarKeep, v.y, v.z * S.roarKeep), true);
+  const rel = sub(o.position, from);
+  const d = Math.max(1, Math.hypot(rel.x, rel.z));
+  const blast = S.roarBlast * (1 - 0.6 * Math.min(1, d / S.roarRadius));
+  o.body.applyImpulse(scale(v3(rel.x / d, 0.25, rel.z / d), blast), true);
 }
 
 /** While Steve is too cool or Gus is a boulder, karts that get close are shoved aside. */

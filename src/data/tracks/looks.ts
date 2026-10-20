@@ -45,6 +45,14 @@ export interface TrackLook {
   sunGlow?: number;
   /** Grass tufts along the road's edges. */
   tufts?: boolean;
+  /** Ground height below which nothing grows (the sea, on a coast). */
+  shoreline?: number;
+  /** Leaves drifting down around the camera, a second (0 or omitted: none). */
+  leaves?: number;
+  /** Glowing embers rising around the camera, a second. */
+  embers?: number;
+  /** Waves surging over the ford, throwing spray (a coast). */
+  waveSpray?: boolean;
 }
 
 export const LOOKS: Record<string, TrackLook> = {
@@ -62,6 +70,7 @@ export const LOOKS: Record<string, TrackLook> = {
     sunIntensity: 2.2,
     ground: '#3f7f2f',
     canopy: false,
+    leaves: 3,
     vineArches: true,
     scenery: 1,
     road: 'dirt',
@@ -86,6 +95,7 @@ export const LOOKS: Record<string, TrackLook> = {
     sunIntensity: 1.1,
     ground: '#2f5e26',
     canopy: true,
+    leaves: 10,
     vineArches: false,
     stream: CANOPY_STREAM,
     scenery: 1.2,
@@ -109,6 +119,7 @@ export const LOOKS: Record<string, TrackLook> = {
     sunIntensity: 2.3,
     ground: '#2a4f22',
     canopy: false,
+    leaves: 8,
     vineArches: false,
     scenery: 0,
     road: 'bark',
@@ -117,6 +128,33 @@ export const LOOKS: Record<string, TrackLook> = {
     branches: true,
     clouds: 0xffffff,
     sunGlow: 0xfff0b0,
+  },
+  'coconut-cove': {
+    blurb: 'Up the ridge, down three treetops, round the beach.',
+    skyTop: 0x2f9be6,
+    skyHorizon: 0xd6f3f5,
+    fog: 0xc4e8ee,
+    fogNear: 90,
+    fogFar: 460,
+    hemiSky: 0xfff6dc,
+    hemiGround: 0x4f7a34,
+    hemiIntensity: 1.4,
+    sun: 0xfff0c8,
+    sunIntensity: 2.3,
+    ground: '#4f8a34',
+    canopy: false,
+    leaves: 4,
+    waveSpray: true,
+    vineArches: false,
+    scenery: 0.7,
+    road: 'dirt',
+    barrier: 'logs',
+    riverUnderGaps: false,
+    branches: false,
+    clouds: 0xffffff,
+    sunGlow: 0xfff0b0,
+    tufts: true,
+    shoreline: 0.55,
   },
   'lava-run': {
     blurb: 'The volcano is erupting. Get down the mountain before the lava does.',
@@ -132,6 +170,7 @@ export const LOOKS: Record<string, TrackLook> = {
     sunIntensity: 1.7,
     ground: '#3f5a2a',
     canopy: false,
+    embers: 24,
     vineArches: false,
     scenery: 0.45,
     road: 'dirt',
