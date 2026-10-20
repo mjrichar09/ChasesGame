@@ -719,23 +719,28 @@ button:disabled {
 }
 
 .hud-item {
-  width: 92px;
-  height: 92px;
+  /* Ring colour per item — matches the pickup rings on the track (render/itemsView.ts). */
+  --ring: #6b5a44;
+  width: 120px;
+  height: 120px;
   border-radius: 50%;
-  border: 5px solid var(--ink);
+  border: 9px solid var(--ring);
   background: radial-gradient(circle at 40% 35%, #fff6dd, #e8c98a);
-  box-shadow: 0 6px 0 rgba(0, 0, 0, 0.3);
+  box-shadow: 0 0 0 4px var(--ink), inset 0 0 0 3px var(--ink), 0 0 18px 2px var(--ring), 0 7px 0 4px rgba(0, 0, 0, 0.3);
   display: grid;
   place-items: center;
-  font-size: 54px;
+  font-size: 76px;
+  line-height: 1;
 }
 
 .hud-item[data-kind='banana'] {
-  background: radial-gradient(circle at 40% 35%, #fffbe0, #ffd93b);
+  --ring: #ffd21f;
+  background: radial-gradient(circle at 40% 35%, #fffbe0, #ffe98a);
 }
 
 .hud-item[data-kind='snake'] {
-  background: radial-gradient(circle at 40% 35%, #f0ffe0, #7dd35a);
+  --ring: #a64dff;
+  background: radial-gradient(circle at 40% 35%, #f6ecff, #cfa6ff);
 }
 
 .hud-item.pop {
@@ -743,7 +748,7 @@ button:disabled {
 }
 
 .hud-flight {
-  width: 92px;
+  width: 120px;
   height: 14px;
   border-radius: 7px;
   border: 3px solid var(--ink);
@@ -769,13 +774,14 @@ button:disabled {
 }
 
 .hud-item[data-kind='parrot'] {
-  background: radial-gradient(circle at 40% 35%, #e9fbff, #4dd2ff);
+  --ring: #29c8ff;
+  background: radial-gradient(circle at 40% 35%, #e9fbff, #9ce6ff);
 }
 
 .hud-swagger {
   position: absolute;
-  right: calc(122px + var(--safe-r));
-  top: calc(78px + var(--safe-t));
+  right: calc(152px + var(--safe-r));
+  top: calc(92px + var(--safe-t));
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -881,7 +887,7 @@ button:disabled {
 
 .hud-pause {
   position: absolute;
-  right: calc(122px + var(--safe-r));
+  right: calc(152px + var(--safe-r));
   top: calc(14px + var(--safe-t));
   width: 52px;
   height: 52px;
@@ -1145,10 +1151,14 @@ button:disabled {
     font-size: 16px;
   }
   .hud-item {
-    width: 66px;
-    height: 66px;
-    font-size: 36px;
-    border-width: 4px;
+    width: 86px;
+    height: 86px;
+    font-size: 52px;
+    border-width: 6px;
+    box-shadow: 0 0 0 3px var(--ink), inset 0 0 0 2px var(--ink), 0 0 12px 1px var(--ring), 0 5px 0 3px rgba(0, 0, 0, 0.3);
+  }
+  .hud-flight {
+    width: 86px;
   }
   .hud-map {
     width: 110px;
@@ -1163,15 +1173,15 @@ button:disabled {
     display: none;
   }
   .hud-swagger {
-    right: calc(92px + var(--safe-r));
-    top: calc(64px + var(--safe-t));
+    right: calc(114px + var(--safe-r));
+    top: calc(72px + var(--safe-t));
   }
   .hud-swagger .ring {
     width: 42px;
     height: 42px;
   }
   .hud-pause {
-    right: calc(92px + var(--safe-r));
+    right: calc(114px + var(--safe-r));
     width: 44px;
     height: 44px;
     font-size: 18px;

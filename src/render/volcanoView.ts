@@ -48,7 +48,20 @@ export function buildVolcanoView(track: Track, terrain: Terrain): VolcanoView {
   };
 }
 
-function terrainMesh(t: Terrain): THREE.Mesh {
+/** The volcano's colours by height: rock at the summit, ash, jungle, sand at the shore. */
+function volcanoColour(y: number, c: THREE.Color): void {
+  const rock = new THREE.Color(0x2e2624);
+  const ash = new THREE.Color(0x6b5a4c);
+  const green = new THREE.Color(0x4f7a34);
+  const sand = new THREE.Color(0xd8c38f);
+  if (y > 95) c.copy(ash).lerp(rock, Math.min(1, (y - 95) / 30));
+  else if (y > 45) c.copy(green).lerp(ash, (y - 45) / 50);
+  else if (y > 3) c.copy(green);
+  else c.copy(sand).lerp(green, Math.max(0, y / 3));
+}
+
+/** A terrain grid as a mesh, coloured by `colour(height)`; steep ground shows bare rock. */
+export function terrainMesh(t: Terrain, colour: (y: number, c: THREE.Color) => void = volcanoColour): THREE.Mesh {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(t.vertices, 3));
   geo.setIndex(new THREE.BufferAttribute(t.indices, 1));
@@ -56,17 +69,11 @@ function terrainMesh(t: Terrain): THREE.Mesh {
   const colors = new Float32Array(t.vertices.length);
   const c = new THREE.Color();
   const rock = new THREE.Color(0x2e2624);
-  const ash = new THREE.Color(0x6b5a4c);
-  const green = new THREE.Color(0x4f7a34);
-  const sand = new THREE.Color(0xd8c38f);
   const normals = geo.attributes.normal as THREE.BufferAttribute;
   const rng = new Rng(17);
   for (let i = 0; i < t.vertices.length / 3; i++) {
     const y = t.vertices[i * 3 + 1]!;
-    if (y > 95) c.copy(ash).lerp(rock, Math.min(1, (y - 95) / 30));
-    else if (y > 45) c.copy(green).lerp(ash, (y - 45) / 50);
-    else if (y > 3) c.copy(green);
-    else c.copy(sand).lerp(green, Math.max(0, y / 3));
+    colour(y, c);
     // Steep ground shows bare rock; a little noise so it is not banded.
     const steep = 1 - normals.getY(i);
     c.lerp(rock, Math.min(0.6, steep * 1.4));
@@ -134,7 +141,7 @@ function boulders(track: Track, terrain: Terrain): THREE.InstancedMesh {
   return inst;
 }
 
-function ocean(t: Terrain): THREE.Mesh {
+export function ocean(t: Terrain): THREE.Mesh {
   const mesh = new THREE.Mesh(
     new THREE.PlaneGeometry(4000, 4000),
     new THREE.MeshToonMaterial({ color: 0x2f8fb8, gradientMap: toon(0).gradientMap, emissive: 0x061c28 }),

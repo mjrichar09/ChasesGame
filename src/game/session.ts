@@ -15,18 +15,19 @@
 import * as THREE from 'three';
 import { GORILLAS, type Gorilla } from '../data/gorillas.js';
 import { TRACKS } from '../data/tracks/index.js';
-import { RACE } from '../data/tuning.js';
+import { KART, RACE } from '../data/tuning.js';
 import { LOOKS } from '../data/tracks/looks.js';
 import { Sound, type Voice } from '../audio/sound.js';
 import { ChaseCam } from '../render/chaseCam.js';
 import { Fx } from '../render/fx.js';
+import { Vfx } from '../render/vfx.js';
 import { ItemsView } from '../render/itemsView.js';
 import { KartView } from '../render/kartView.js';
 import { Stage } from '../render/scene.js';
 import { type TrackView, buildTrackView } from '../render/trackView.js';
 import { toon } from '../render/toon.js';
 import { AiDriver, type Difficulty, fieldLevels, personality } from '../sim/driver.js';
-import { MOVES, MOVE_NAMES } from '../sim/swagger.js';
+import { MOVES, MOVE_NAMES, SWAGGER } from '../sim/swagger.js';
 import { type DriverInput, NEUTRAL_INPUT } from '../sim/input.js';
 import { type ItemEvent, Items } from '../sim/items.js';
 import { RaceSim } from '../sim/race.js';
@@ -52,6 +53,9 @@ const nowSecs = () => performance.now() / 1000;
 /** Grid slot the player starts from (0 = pole). Mid-pack: something to chase, something to hold off. */
 const PLAYER_SLOT = 4;
 const MAX_FRAME = 0.1;
+/** Sideways slide (m/s) above which the tyres smoke. */
+const TYRE_SLIP = 4;
+const FIREWORKS = [0xff4d6d, 0xffd23a, 0x29c8ff, 0x7dff6a, 0xd05cf6];
 
 /**
  * Developer switches from the URL: `?laps=1` for short races, `?autopilot`
@@ -76,6 +80,19 @@ export class Game {
   private readonly menu: Menu;
   private readonly sound = new Sound();
   private readonly fx = new Fx();
+  /** Sparks and boost smoke (three.quarks). */
+  private readonly vfx = new Vfx();
+  /** Kart positions last frame and a cooldown per pair, for spotting kart-on-kart hits. */
+  private bumpPrev: THREE.Vector3[] = [];
+  private bumpCool = new Map<number, number>();
+  /** Each kart's velocity as drawn (works for online proxies too). */
+  private viewVel: THREE.Vector3[] = [];
+  /** A wave surging across the ford (coast tracks): seconds to the next, and the one running. */
+  private waveTimer = 0;
+  private wave: { s: number; from: -1 | 1; t: number } | null = null;
+  /** Over the podium: where, and seconds to the next firework. */
+  private podiumAt: THREE.Vector3 | null = null;
+  private fireworkTimer = 0;
   /** Each circuit's scenery, built the first time it is picked. */
   private readonly venues: { track: Track; view: TrackView }[] = [];
   private trackIndex = 0;
@@ -102,6 +119,9 @@ export class Game {
   private warned = false;
   private lastLap = 0;
   private playerFinishedAt: number | null = null;
+  /** Toasted: the kart the camera follows instead (-1 = the player's own). */
+  private watching = -1;
+  private skipHeld = true;
   private seed = 1;
   private difficulty: Difficulty = loadDifficulty();
   private swaggerOn = loadSwagger();
@@ -138,6 +158,8 @@ export class Game {
     this.cam = new ChaseCam(1);
     this.fx.density = this.stage.quality.particles;
     this.stage.scene.add(this.fx.points);
+    this.vfx.density = this.stage.quality.particles;
+    this.stage.scene.add(this.vfx.object);
 
     this.stage.scene.add(this.raceGroup);
     this.buildPodium();
@@ -495,6 +517,12 @@ export class Game {
     this.stage.scene.add(this.raceGroup);
     this.views = [];
     this.itemsView = null;
+    this.vfx.clear();
+    this.bumpPrev = [];
+    this.bumpCool.clear();
+    this.viewVel = [];
+    this.wave = null;
+    this.podiumAt = null;
     this.netBadge.hidden = true;
     void this.keepAwake(false);
   }
@@ -552,6 +580,7 @@ export class Game {
     this.wasWet = sim.karts.map(() => false);
     this.lastLap = 0;
     this.playerFinishedAt = null;
+    this.watching = -1;
     this.acc = 0;
 
     this.hud.setTrack(sim);
@@ -631,6 +660,7 @@ export class Game {
       this.sound.stopEngine();
       this.hud.shout('TOASTED!', 'bad', 3);
       this.voice('ouch', this.player, 1);
+      this.skipHeld = human.item;
     } else if (playerDone && this.playerFinishedAt === null) {
       this.playerFinishedAt = this.time;
       this.sound.play('finish');
@@ -638,7 +668,12 @@ export class Game {
       this.voice(place <= 3 ? 'hoot' : 'grunt', this.player, 1);
       this.hud.shout(place === 1 ? 'YOU WIN!' : `FINISHED ${place}${['st', 'nd', 'rd'][place - 1] ?? 'th'}`, 'finish', 3);
     }
-    if (this.playerFinishedAt !== null && (sim.allFinished || this.time - this.playerFinishedAt > 10)) {
+    // Toasted: watch the rest of the race from the leader's tail (item skips
+    // to the results). Finished: the results follow shortly.
+    const skip = playerPr.dnf && human.item && !this.skipHeld;
+    this.skipHeld = human.item;
+    const wait = playerPr.dnf ? 240 : 10;
+    if (this.playerFinishedAt !== null && (sim.allFinished || skip || this.time - this.playerFinishedAt > wait)) {
       this.showResults();
     }
   }
@@ -701,6 +736,11 @@ export class Game {
     });
     this.raceGroup.visible = false;
     this.finishPodium = group;
+    // Confetti over the steps and fireworks behind them; the race's own effects stop.
+    this.vfx.quiet();
+    this.podiumAt = group.position.clone();
+    this.vfx.confetti(this.podiumAt.clone().setY(this.podiumAt.y + 9));
+    this.fireworkTimer = 0.6;
     this.stage.scene.add(group);
   }
 
@@ -737,6 +777,9 @@ export class Game {
           break;
         case 'peelHit':
           this.fx.emit({ pos: v(e.pos).setY(e.pos.y + 0.8), count: 22, color: [0xffe14d, 0xffffff], speed: [3, 7], size: [0.3, 0.6], life: [0.4, 0.9], gravity: 6 });
+          // Mushed banana flying, and a scuffed ring of tyre marks where it spun.
+          this.vfx.bananaBits(v(e.pos).setY(e.pos.y + 0.4));
+          this.ring(v(e.pos).setY(e.pos.y + 0.45), 0x2a1d14, 2.4, 1.6, false);
           if (vol > 0) this.sound.play('peelHit', vol);
           this.voice('ouch', e.kart, vol);
           if (e.owner !== e.kart) {
@@ -765,8 +808,9 @@ export class Game {
           this.swaggerEvent(e);
           break;
         case 'bonk':
-          // Splinters and dust off the logs.
+          // Splinters and dust off the logs, sparks where the kart scrapes them.
           this.fx.emit({ pos: v(e.pos), count: Math.round(6 + e.strength * 14), color: [0x8a5a33, 0xd2b07a], speed: [2, 6], size: [0.25, 0.6], life: [0.3, 0.7], gravity: 8 });
+          this.wallSparks(sim, e.kart, e.strength);
           if (vol > 0) this.sound.play('land', vol * (0.5 + e.strength * 0.5));
           if (e.kart === this.player) this.cam.kick(0.25 + e.strength * 0.35);
           if (e.strength > 0.6) this.voice('grunt', e.kart, vol * 0.8);
@@ -776,6 +820,9 @@ export class Game {
           break;
         case 'whack':
           this.fx.emit({ pos: v(e.pos).setY(e.pos.y + 1.2), count: 18, color: [0xffffff, 0xffe14d], speed: [4, 9], size: [0.3, 0.55], life: [0.3, 0.6] });
+          // Stars, loose fur in the victim's colour, and an impact ring.
+          this.vfx.whacked(v(e.pos).setY(e.pos.y + 1.4), this.roster[e.victim]!.fur);
+          this.ring(v(e.pos).setY(e.pos.y + 1.2), 0xffffff, 3, 0.3);
           if (vol > 0 || e.victim === this.player) this.sound.play('whack', Math.max(vol, e.victim === this.player ? 1 : 0));
           this.views[e.kart]?.celebrate(1.5, true);
           this.voice('grunt', e.kart, vol);
@@ -811,6 +858,13 @@ export class Game {
         const hard = Math.min(1, k.lastLanding / 9);
         const p = k.position;
         this.fx.emit({ pos: new THREE.Vector3(p.x, p.y - 0.8, p.z), count: Math.round(6 + hard * 18), color: [0xc9a46c, 0xa8865a], speed: [2, 6], dir: new THREE.Vector3(0, 0.4, 0), spread: 1, size: [0.6, 1.2], life: [0.4, 0.9], gravity: 1 });
+        // Big air: a ring of dust rolls out from the wheels (sawdust and
+        // splinters on the treetop decks, where the drops are biggest).
+        if (hard > 0.25) {
+          const deck = sim.track.aloft(sim.progress[i]!.s) || LOOKS[sim.track.def.id]?.road === 'bark';
+          this.vfx.dust(new THREE.Vector3(p.x, p.y - 0.75, p.z), hard * (deck ? 1.8 : 1), deck ? 0xb08a5c : 0xd2b07a);
+          if (deck) this.fx.emit({ pos: new THREE.Vector3(p.x, p.y - 0.6, p.z), count: Math.round(hard * 16), color: [0x8a5a33, 0xd2b07a], speed: [3, 8], dir: new THREE.Vector3(0, 1, 0), spread: 0.9, size: [0.2, 0.45], life: [0.4, 0.8], gravity: 14 });
+        }
         const vol = i === this.player ? 1 : this.nearPlayer(p);
         if (vol > 0 && hard > 0.15) this.sound.play('land', vol * hard);
         if (i === this.player) this.cam.kick(hard * 0.5);
@@ -834,22 +888,38 @@ export class Game {
       this.fx.emit({ pos: at.clone().setY(at.y + 2), count: 24, color: [0xffcc33, 0xfff6dd], speed: [3, 7], size: [0.3, 0.6], life: [0.4, 0.8], gravity: 3 });
       return;
     }
-    if (mine) this.cam.kick(0.25);
+    if (mine) this.cam.kick(0.45);
+    else if (vol > 0.3) this.cam.kick(0.2 * vol);
     switch (e.move) {
       case 'roar':
-        this.ring(at, 0xffcc33, 12);
+        // Rings out to the move's real reach, so you can see who it caught.
+        this.ring(at, 0xffcc33, SWAGGER.roarRadius, 0.8);
+        this.ring(at, 0xff8a1f, SWAGGER.roarRadius * 0.6, 0.55);
+        this.fx.emit({ pos: at.clone().setY(at.y + 0.3), count: 60, color: [0xffcc33, 0xff8a1f, 0xfff6dd], speed: [10, 22], dir: new THREE.Vector3(0, 0.15, 0), spread: 1, size: [0.4, 0.9], life: [0.4, 0.9], drag: 1.5 });
+        // The shockwave: dust blown flat out along the road.
+        this.vfx.dust(at.clone().setY(at.y - 0.6), 3, 0xe8d3a8);
         if (vol > 0) this.sound.play('land', vol);
         this.sound.say('roar', 1000 + e.kart, who.size, vol);
         break;
       case 'beat':
-        this.ring(at, 0x9b5cf6, 30);
-        this.ring(at, 0x9b5cf6, 20);
+        this.ring(at, 0x9b5cf6, SWAGGER.beatRadius, 0.9);
+        this.ring(at, 0xd05cf6, SWAGGER.beatRadius * 0.66, 0.7);
+        this.ring(at, 0x9b5cf6, SWAGGER.beatRadius * 0.33, 0.5);
+        this.fx.emit({ pos: at.clone().setY(at.y + 1.5), count: 40, color: [0x9b5cf6, 0xd05cf6, 0xffffff], speed: [4, 10], size: [0.3, 0.7], life: [0.6, 1.2], gravity: 1 });
         break;
       case 'slowClap':
-        this.ring(at, 0xffffff, 25);
+        this.ring(at, 0xffffff, SWAGGER.clapRange, 0.9);
+        this.ring(at, 0xfff6dd, SWAGGER.clapRange * 0.5, 0.6);
+        break;
+      case 'tooCool':
+      case 'boulder':
+        this.ring(at, e.move === 'tooCool' ? 0x4dd2ff : 0xd2b07a, SWAGGER.shoveRadius * 2, 0.5);
+        if (e.move === 'boulder') this.vfx.dust(at.clone().setY(at.y - 0.6), 1.6, 0x9a948c);
+        this.fx.emit({ pos: at.clone().setY(at.y + 1), count: 40, color: e.move === 'tooCool' ? [0x4dd2ff, 0xe9fbff] : [0xd2b07a, 0x8a6a42], speed: [4, 10], size: [0.4, 0.9], life: [0.5, 1], gravity: 3 });
         break;
       case 'pogo':
         this.fx.emit({ pos: at.clone().setY(at.y - 0.6), count: 30, color: [0xd2b07a, 0xbf9a62], speed: [3, 8], dir: new THREE.Vector3(0, 0.3, 0), spread: 1, size: [0.6, 1.2], life: [0.5, 1], gravity: 2 });
+        this.vfx.dust(at.clone().setY(at.y - 0.6), 2);
         if (vol > 0) this.sound.play('land', vol);
         break;
       case 'feed':
@@ -884,16 +954,16 @@ export class Game {
     });
   }
 
-  /** An expanding, fading ring on the ground. */
-  private ring(at: THREE.Vector3, color: number, size: number): void {
+  /** An expanding, fading ring on the ground: a glow, or (not additive) a scuff. */
+  private ring(at: THREE.Vector3, color: number, size: number, life = 0.7, additive = true): void {
     const mesh = new THREE.Mesh(
       new THREE.RingGeometry(0.85, 1, 48),
-      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending, depthWrite: false, side: THREE.DoubleSide }),
     );
     mesh.rotation.x = -Math.PI / 2;
     mesh.position.copy(at).setY(at.y - 0.4);
     this.stage.scene.add(mesh);
-    this.rings.push({ mesh, t: 0, life: 0.7, size });
+    this.rings.push({ mesh, t: 0, life, size });
   }
 
   private updateRings(dt: number): void {
@@ -964,8 +1034,160 @@ export class Game {
     if (burst && this.sim) this.cam.kick(0.15);
   }
 
-  /** Per-frame effects: dust, boost flames. */
-  private ambientFx(sim: RaceSim): void {
+  /** Sparks off the side of kart `i` that hit the logs, flying back off the wall. */
+  private wallSparks(sim: RaceSim, i: number, strength: number): void {
+    const view = this.views[i];
+    if (!view || view.pos.distanceTo(this.cam.camera.position) > 90) return;
+    const pr = sim.progress[i]!;
+    const r = sim.track.at(pr.s).r;
+    const side = Math.sign(pr.lateral) || 1;
+    const out = new THREE.Vector3(r.x, 0, r.z).multiplyScalar(side);
+    const at = view.pos.clone().addScaledVector(out, KART.half.x).setY(view.pos.y + 0.1);
+    // Off the wall, up, and trailing behind the kart.
+    const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(view.rot);
+    const dir = out.clone().multiplyScalar(-0.7).add(new THREE.Vector3(0, 0.8, 0)).addScaledVector(fwd, -0.5);
+    this.vfx.hitSparks(at, dir, 0.3 + strength * 0.7);
+  }
+
+  /**
+   * Kart-on-kart hits, spotted from the views (the sim has no event for them,
+   * and online the other phones' karts are proxies): two karts touching and
+   * closing fast throw sparks from where they meet.
+   */
+  private kartSparks(dt: number): void {
+    const n = this.views.length;
+    if (dt <= 0) return;
+    const camPos = this.cam.camera.position;
+    const vel = this.views.map((view, i) => {
+      const prev = this.bumpPrev[i];
+      const vel = prev ? view.pos.clone().sub(prev).divideScalar(dt) : new THREE.Vector3();
+      this.bumpPrev[i] = view.pos.clone();
+      // A respawn teleports: no hit from that.
+      return vel.lengthSq() > 80 * 80 ? new THREE.Vector3() : vel;
+    });
+    this.viewVel = vel;
+    for (const [key, t] of this.bumpCool) {
+      if (t <= dt) this.bumpCool.delete(key);
+      else this.bumpCool.set(key, t - dt);
+    }
+    for (let i = 0; i < n; i++) {
+      const a = this.views[i]!.pos;
+      if (a.distanceTo(camPos) > 90) continue;
+      for (let j = i + 1; j < n; j++) {
+        const b = this.views[j]!.pos;
+        const d = a.distanceTo(b);
+        if (d > 2.6 || d < 0.01 || this.bumpCool.has(i * n + j)) continue;
+        const normal = b.clone().sub(a).divideScalar(d);
+        const closing = -vel[j]!.clone().sub(vel[i]!).dot(normal);
+        if (closing < 2.5) continue;
+        this.bumpCool.set(i * n + j, 0.35);
+        const at = a.clone().add(b).multiplyScalar(0.5);
+        at.y += 0.2;
+        // Up and out, sideways to the hit.
+        const dir = new THREE.Vector3(-normal.z, 1.4, normal.x).multiplyScalar(Math.random() < 0.5 ? 1 : -1);
+        dir.y = Math.abs(dir.y);
+        this.vfx.hitSparks(at, dir, Math.min(1, closing / 12));
+      }
+    }
+  }
+
+  /**
+   * Kart `i`'s looping effects: tyre smoke (sliding, hard braking, spun out),
+   * burning tyres under No Brakes, sparks grinding along the logs, boulder grit,
+   * Too Cool's glitter and feathers from a parrot overhead.
+   */
+  private kartTrails(sim: RaceSim, i: number): void {
+    const k = sim.karts[i]!;
+    const view = this.views[i]!;
+    const vel = this.viewVel[i] ?? new THREE.Vector3();
+    const speed = vel.length();
+    const onGround = k.grounded >= 2 && !k.flying;
+    const rear = new THREE.Vector3(0, -0.8, KART.wheelRearZ).applyQuaternion(view.rot).add(view.pos);
+    const behind = new THREE.Vector3(0, 0.6, -1).applyQuaternion(view.rot);
+    // Kart frame: local +X is the kart's left.
+    const slip = Math.abs(vel.dot(new THREE.Vector3(1, 0, 0).applyQuaternion(view.rot)));
+    let tyre = 0;
+    if (onGround) {
+      if (k.spinning) tyre = 45;
+      else if (slip > TYRE_SLIP && speed > 5) tyre = Math.min(45, 10 + (slip - TYRE_SLIP) * 10);
+      if (k.applied.brake > 0.6 && k.forwardSpeed > 10) tyre = Math.max(tyre, 22);
+    }
+    this.vfx.trail('tyre', i, rear, behind, tyre);
+    this.vfx.trail('burn', i, rear, behind, onGround && k.noBrakesTime > 0 ? 35 : 0);
+
+    // Grinding along a barrier: the kart's edge is at the logs and it is moving.
+    const pr = sim.progress[i]!;
+    const smp = sim.track.at(pr.s);
+    const side = pr.lateral < 0 ? -1 : 1;
+    const grinding =
+      onGround && speed > 5 && smp.road && !k.wet && Math.abs(pr.lateral) > smp.halfWidth - KART.half.x - 0.3 && !sim.track.isOpen(pr.s, side);
+    const out = new THREE.Vector3(smp.r.x, 0, smp.r.z).multiplyScalar(side);
+    const edge = view.pos.clone().addScaledVector(out, KART.half.x).setY(view.pos.y + 0.1);
+    const back = vel.clone().normalize().multiplyScalar(-0.8).addScaledVector(out, -0.4).add(new THREE.Vector3(0, 0.7, 0));
+    this.vfx.trail('scrape', i, edge, back, grinding ? speed * 2.5 : 0);
+
+    this.vfx.trail('chips', i, rear, behind.clone().setY(1.2), onGround && k.boulderTime > 0 && speed > 4 ? speed * 1.5 : 0);
+    this.vfx.trail('cool', i, view.pos, null, k.coolTime > 0 ? 40 : 0);
+    this.vfx.trail('feathers', i, view.pos.clone().setY(view.pos.y + 3.2), null, k.flying ? 6 : 0);
+  }
+
+  /** Leaves or embers in the air ahead of the camera, and waves over a coast's ford. */
+  private airFx(sim: RaceSim, dt: number): void {
+    const look = LOOKS[sim.track.def.id];
+    const camPos = this.cam.camera.position;
+    // Well ahead and thick, since the camera races through the field: the rate
+    // grows with the camera's speed, so the air looks as full at 30 m/s as at rest.
+    const ahead = camPos.clone().addScaledVector(this.cam.camera.getWorldDirection(new THREE.Vector3()), 26);
+    const rush = 1 + (this.viewVel[this.focusKart(sim)]?.length() ?? 0) / 6;
+    this.vfx.ambient('leaves', ahead.clone().setY(ahead.y + 5), (look?.leaves ?? 0) * rush);
+    this.vfx.ambient('embers', ahead, (look?.embers ?? 0) * rush);
+    if (!look?.waveSpray) return;
+    // Every few seconds a wave runs in from the sea across the ford: a line
+    // of spray and foam sweeping over the road.
+    const t = sim.track;
+    if (!this.wave) {
+      this.waveTimer -= dt;
+      const w = t.waters[Math.floor(Math.random() * t.waters.length)];
+      if (this.waveTimer > 0 || !w) return;
+      this.waveTimer = 2 + Math.random() * 2;
+      const s = w.s0 + Math.random() * (w.s1 - w.s0);
+      const mid = t.at(s);
+      if (camPos.distanceTo(new THREE.Vector3(mid.p.x, mid.p.y, mid.p.z)) > 150) return;
+      // The sea is on the lower side.
+      const h = t.def.terrain?.height;
+      const ground = (lat: number) => (h ? h(mid.p.x + mid.r.x * lat, mid.p.z + mid.r.z * lat) : 0);
+      this.wave = { s, from: ground(-30) < ground(30) ? -1 : 1, t: 0 };
+    }
+    const wave = this.wave;
+    const reach = t.at(wave.s).halfWidth + 3;
+    const before = wave.t;
+    wave.t += dt / 0.9;
+    // Spray at each step across the road that the front passed this frame.
+    for (let step = Math.ceil(before * 8); step <= Math.min(8, wave.t * 8); step++) {
+      const lat = wave.from * reach * (1 - (step / 8) * 2);
+      const p = t.pointAt(wave.s + (Math.random() - 0.5) * 3, lat);
+      const at = new THREE.Vector3(p.x, p.y + 0.15, p.z);
+      this.fx.emit({ pos: at, count: 8, color: [0xffffff, 0xd8f4ff], speed: [3, 7], dir: new THREE.Vector3(0, 1, 0), spread: 0.5, size: [0.4, 0.9], life: [0.5, 1.0], gravity: 10 });
+      this.vfx.dust(at, 0.35, 0xf4fbff);
+    }
+    if (wave.t >= 1) this.wave = null;
+  }
+
+  /** Over the podium: a firework every second or so. */
+  private fireworks(dt: number): void {
+    if (!this.podiumAt || !this.finishPodium) return;
+    this.fireworkTimer -= dt;
+    if (this.fireworkTimer > 0) return;
+    this.fireworkTimer = 0.5 + Math.random() * 0.8;
+    // In the podium's frame (+Z faces the camera): behind the steps, low enough to stay in shot.
+    const at = this.finishPodium.localToWorld(new THREE.Vector3((Math.random() - 0.5) * 24, 9 + Math.random() * 4, -6 - Math.random() * 8));
+    this.vfx.firework(at, FIREWORKS[Math.floor(Math.random() * FIREWORKS.length)]!);
+  }
+
+  /** Per-frame effects: dust, boost flames and smoke, sparks, the air. */
+  private ambientFx(sim: RaceSim, dt: number): void {
+    this.kartSparks(dt);
+    this.airFx(sim, dt);
     const camPos = this.cam.camera.position;
     // Smoke and sparks boiling off the lava front, when it is in view.
     const front = sim.lavaS;
@@ -981,7 +1203,10 @@ export class Game {
     }
     sim.karts.forEach((k, i) => {
       const view = this.views[i]!;
-      if (view.pos.distanceTo(camPos) > 80 || k.out) return;
+      if (view.pos.distanceTo(camPos) > 80 || k.out) {
+        this.vfx.stopTrails(i);
+        return;
+      }
       const speed = Math.abs(k.forwardSpeed);
       if (k.grounded >= 2 && speed > 6 && Math.random() < speed / 40) {
         const back = new THREE.Vector3(0, -0.9, -1).applyQuaternion(view.rot).add(view.pos);
@@ -991,7 +1216,9 @@ export class Game {
         const ex = view.rig.exhaust.clone().applyQuaternion(view.rot).add(view.pos);
         const back = new THREE.Vector3(0, 0.2, -1).applyQuaternion(view.rot);
         this.fx.emit({ pos: ex, count: 3, color: [0xffe14d, 0xff8a1f, 0xff4d1f], speed: [3, 7], dir: back, spread: 0.25, size: [0.35, 0.7], life: [0.15, 0.35], drag: 4 });
-      }
+        this.vfx.trail('boost', i, ex, back, 40);
+      } else this.vfx.trail('boost', i, view.pos, null, 0);
+      this.kartTrails(sim, i);
       // Skimming across the top: a big fan of spray behind, and a callout.
       if (k.skimming) {
         const back = new THREE.Vector3(0, -0.7, -1.4).applyQuaternion(view.rot).add(view.pos);
@@ -1046,26 +1273,28 @@ export class Game {
     if (sim && this.state === 'results' && this.finishPodium) {
       for (const v of this.finishViews) v.animateIdle(dt);
       this.podiumCamera();
+      this.fireworks(dt);
     } else if (sim) {
       const alpha = this.acc / sim.dt;
       sim.karts.forEach((k, i) => this.views[i]!.update(k, alpha, dt));
       this.placeShadows(sim);
       this.itemsView?.update(sim.items, this.time);
-      if (this.state !== 'paused') this.ambientFx(sim);
-      const me = this.views[this.player]!;
+      if (this.state !== 'paused') this.ambientFx(sim, dt);
       const kart = sim.karts[this.player]!;
+      const focus = this.focusKart(sim);
       if (this.state !== 'paused') {
-        this.cam.update(dt, me.pos, me.rot, {
-          boosting: kart.boosting,
-          spinning: kart.spinning,
-          flying: kart.flying,
-          lookBack: this.controls.lookingBack,
-          speed: kart.forwardSpeed,
+        const fk = sim.karts[focus]!;
+        this.cam.update(dt, this.views[focus]!.pos, this.views[focus]!.rot, {
+          boosting: fk.boosting,
+          spinning: fk.spinning,
+          flying: fk.flying,
+          lookBack: focus === this.player && this.controls.lookingBack,
+          speed: fk.forwardSpeed,
           track: sim.track,
-          s: sim.progress[this.player]!.s,
+          s: sim.progress[focus]!.s,
         });
       }
-      this.stage.followSun(me.pos);
+      this.stage.followSun(this.views[focus]!.pos);
       if (this.state === 'race') {
         this.hud.update(dt, sim, this.player, this.roster);
         this.sound.updateEngine(dt, kart.forwardSpeed, kart.applied.throttle, kart.grounded === 0, kart.boosting);
@@ -1088,12 +1317,33 @@ export class Game {
 
     if (this.state !== 'paused') {
       this.fx.update(dt);
+      this.vfx.update(dt);
       this.updateRings(dt);
     }
     // The touch ★ shows only with a full meter.
     if (this.sim && this.state === 'race') this.touch.setSwaggerReady(this.sim.swaggerOn && this.sim.karts[this.player]!.swagger >= 100);
     this.venues[this.trackIndex]?.view.sky?.update(this.time, this.cam.camera);
     this.stage.render(this.cam.camera);
+  }
+
+  /**
+   * Whose kart the camera follows: the player's — or, once the lava has
+   * toasted them, whoever is leading the karts still racing.
+   */
+  private focusKart(sim: RaceSim): number {
+    if (this.state !== 'race' || !sim.progress[this.player]!.dnf) return this.player;
+    // A moment on the smoking wreck first.
+    if (this.playerFinishedAt === null || this.time - this.playerFinishedAt < 2) return this.player;
+    const order = sim.standings();
+    const lead =
+      order.find((i) => !sim.karts[i]!.out && sim.progress[i]!.finishTime === null) ?? order.find((i) => !sim.karts[i]!.out);
+    if (lead === undefined) return this.player;
+    if (lead !== this.watching) {
+      this.watching = lead;
+      this.cam.cut();
+      this.hud.shout(`WATCHING ${this.roster[lead]!.name.split(' ')[0]!.toUpperCase()}`, 'lap', 1.6);
+    }
+    return lead;
   }
 
   /** Frame the finish podium from in front, drifting slowly. */

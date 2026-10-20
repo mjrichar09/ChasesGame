@@ -80,7 +80,35 @@ export interface WidthDef extends TrackAnchor {
   ease?: number;
 }
 
-export type FeatureDef = KickerDef | GapDef | StreamDef | OpenDef | WidthDef;
+/**
+ * A run of drops: `length` metres of road cut into `count` flat platforms,
+ * each a step lower than the one before, with a `gap`-metre ledge at the
+ * start of each. Karts sail off one platform and land on the next — no
+ * ramps, so even a slow kart just tips over the edge. The levels come from
+ * the control points: the road enters at its height at the start, and each
+ * platform sits at the height the spline has at its far end, so the last
+ * one meets the road beyond. Give the stretch a steady descent.
+ *
+ * Each platform is wide where karts land and tapers toward its ledge (the
+ * run-up to the first ledge tapers too), so a kart that goes off the edge of
+ * one still lands well inside the next — not beyond its barrier.
+ *
+ * The platforms stand clear of the ground (`Track.aloft`): shaped terrain
+ * keeps to its own height under them instead of rising to meet the road.
+ */
+export interface TerracesDef extends TrackAnchor {
+  kind: 'terraces';
+  length: number;
+  count: number;
+  /** Ledge length at each drop, m (default 2). */
+  gap?: number;
+}
+
+/** Terrace platform width at landing and at the ledge, as multiples of the road's width there. */
+const TERRACE_FLARE = 1.3;
+const TERRACE_TAPER = 0.8;
+
+export type FeatureDef = KickerDef | GapDef | StreamDef | OpenDef | WidthDef | TerracesDef;
 
 export interface PickupRowDef extends TrackAnchor {
   /** Lateral positions across the road, m (+ = right). */
@@ -189,6 +217,12 @@ const BANK_GAIN = 9;
 export const WALL_HEIGHT = 1.1;
 /** Collision height, m — taller than the logs so a bouncing kart cannot hop them. */
 export const WALL_SOLID_HEIGHT = 1.6;
+/**
+ * Up on terrace platforms the barrier's collision is taller still: karts
+ * landing a drop rebound a couple of metres, and any sideways drift carried
+ * them over a normal barrier and down into the valley.
+ */
+export const WALL_ALOFT_HEIGHT = 3;
 export const WALL_THICK = 0.6;
 
 export class Track {
@@ -198,6 +232,8 @@ export class Track {
   readonly kickers: Kicker[] = [];
   readonly gaps: Gap[] = [];
   readonly waters: Water[] = [];
+  /** Terrace runs (platforms with drops between): the road stands clear of the ground here. */
+  readonly terraces: { s0: number; s1: number; platforms: [number, number][] }[] = [];
   /** Stretches with no barrier on a side. */
   readonly opens: { s0: number; s1: number; side: -1 | 0 | 1 }[] = [];
   readonly walls: Wall[] = [];
@@ -226,6 +262,18 @@ export class Track {
     for (const f of def.features) {
       const s = this.anchor(f);
       if (f.kind === 'width') continue; // Already in the samples.
+      if (f.kind === 'terraces') {
+        // Heights are already stepped in the samples; each ledge is a short gap.
+        const P = f.length / f.count;
+        const gap = f.gap ?? 2;
+        const platforms: [number, number][] = [];
+        for (let i = 0; i < f.count; i++) {
+          this.gaps.push({ s0: this.wrap(s + i * P), s1: this.wrap(s + i * P + gap) });
+          platforms.push([this.wrap(s + i * P + gap), this.wrap(s + (i + 1) * P)]);
+        }
+        this.terraces.push({ s0: s, s1: this.wrap(s + f.length), platforms });
+        continue;
+      }
       if (f.kind === 'open') {
         this.opens.push({ s0: s, s1: s + f.length, side: f.side ?? 0 });
         continue;
@@ -336,6 +384,12 @@ export class Track {
       });
   }
 
+  /** True on a terrace run: the road is up in the air, nothing but treetops under it. */
+  aloft(s: number): boolean {
+    const w = this.wrap(s);
+    return this.terraces.some((t) => this.between(w, t.s0, t.s1));
+  }
+
   inWater(s: number): boolean {
     const w = this.wrap(s);
     return this.waters.some((r) => this.between(w, r.s0, r.s1));
@@ -437,11 +491,12 @@ export class Track {
           const mid = scale(add(a, b), 0.5);
           const d = sub(b, a);
           const len = Math.hypot(d.x, d.z);
+          const h = this.aloft(s) ? WALL_ALOFT_HEIGHT : WALL_SOLID_HEIGHT;
           this.walls.push({
             s,
-            center: add(mid, v3(0, WALL_SOLID_HEIGHT / 2 - 0.15, 0)),
+            center: add(mid, v3(0, h / 2 - 0.15, 0)),
             // A little overlap so there are no seams to snag on.
-            half: v3(WALL_THICK / 2, WALL_SOLID_HEIGHT / 2 + 0.15, len / 2 + Math.min(0.3, seg * 0.1)),
+            half: v3(WALL_THICK / 2, h / 2 + 0.15, len / 2 + Math.min(0.3, seg * 0.1)),
             yaw: Math.atan2(d.x, d.z),
             side,
           });
@@ -621,6 +676,49 @@ function applyWidths(def: TrackDef, raw: { w: number }[], pointS: number[], leng
   }
 }
 
+/**
+ * Step the heights of each terrace run (`TerracesDef`): flat platforms, each
+ * at the height the spline has at its far end, joined by straight drops over
+ * the ledge gaps. Returns the sample indices it flattened, whose tangents
+ * should be level.
+ */
+function applyTerraces(def: TrackDef, raw: { p: Vec3; w: number }[], pointS: number[], closed: boolean): Set<number> {
+  const n = raw.length;
+  const flat = new Set<number>();
+  const idx = (s: number) => {
+    const i = Math.round(s / DS);
+    return closed ? ((i % n) + n) % n : clamp(i, 0, n - 1);
+  };
+  for (const f of def.features) {
+    if (f.kind !== 'terraces') continue;
+    const s0 = (pointS[f.at] ?? 0) + (f.offset ?? 0);
+    const P = f.length / f.count;
+    const gap = f.gap ?? 2;
+    const levels = [raw[idx(s0)]!.p.y];
+    for (let i = 1; i <= f.count; i++) levels.push(raw[idx(s0 + i * P)]!.p.y);
+    for (let d = 0; d < f.length; d += DS) {
+      const i = Math.min(f.count - 1, Math.floor(d / P));
+      const local = d - i * P;
+      const y = local < gap ? levels[i]! + (levels[i + 1]! - levels[i]!) * (local / gap) : levels[i + 1]!;
+      const j = idx(s0 + d);
+      raw[j]!.p.y = y;
+      // Wide at the landing, narrowing to the next ledge (the last platform
+      // eases back to the road's own width instead).
+      const u = Math.min(1, local / P);
+      const end = i === f.count - 1 ? 1 : TERRACE_TAPER;
+      raw[j]!.w *= TERRACE_FLARE + (end - TERRACE_FLARE) * u;
+      flat.add(j);
+    }
+    // The run-up to the first ledge narrows too.
+    for (let d = 1; d <= P / 2; d += DS) {
+      const j = idx(s0 - d);
+      const u = d / (P / 2);
+      raw[j]!.w *= TERRACE_TAPER + (1 - TERRACE_TAPER) * u * u * (3 - 2 * u);
+    }
+  }
+  return flat;
+}
+
 /** Centripetal Catmull-Rom between p1 and p2. */
 function catmull(p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3, t: number): Vec3 {
   const alpha = 0.5;
@@ -726,10 +824,15 @@ function buildSamples(def: TrackDef): { samples: Sample[]; pointS: number[] } {
   raw.forEach((r, i) => (r.w = Math.max(r.w, base[i]!)));
   relaxTightCorners(raw, !def.open);
   raw.forEach((r, i) => (r.w = narrowed[i]!));
+  const level = applyTerraces(def, raw, pointS, closed);
 
   const up = v3(0, 1, 0);
   const wrapI = (i: number) => (closed ? ((i % count) + count) % count : clamp(i, 0, count - 1));
-  const tangents = raw.map((_, i) => normalize(sub(raw[wrapI(i + 1)]!.p, raw[wrapI(i - 1)]!.p)));
+  const tangents = raw.map((_, i) => {
+    const t = sub(raw[wrapI(i + 1)]!.p, raw[wrapI(i - 1)]!.p);
+    // Terrace platforms lie level right to their edges.
+    return normalize(level.has(i) ? v3(t.x, 0, t.z) : t);
+  });
   const curv = tangents.map((t, i) => {
     const t2 = tangents[wrapI(i + 1)]!;
     const h1 = normalize(v3(t.x, 0, t.z));

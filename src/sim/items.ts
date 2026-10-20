@@ -7,9 +7,11 @@
  * - **Bananas:** one per pickup, stacking up to three (drive through more
  *   while holding bananas). Each one eaten is a 3 s boost and drops a
  *   peel behind you. Peels have no timer — they stay until somebody hits one
- *   and spins out. (The track holds at most `maxPeels`; the oldest goes first.)
+ *   and spins out, turning toward the side the peel was on. (The track holds
+ *   at most `maxPeels`; the oldest goes first.)
  * - **Snake:** three swings, left or right, Road Rash style. A swing hits the
- *   nearest kart alongside on that side: it loses speed and wobbles.
+ *   nearest kart alongside on that side: it loses most of its speed, wobbles
+ *   and stays slowed for a moment.
  *
  * Players hold one item at a time. Everything is seeded, so a race replays
  * exactly from its seed and inputs.
@@ -166,7 +168,7 @@ export class Items {
     const d = sub(kart.position, peel.pos);
     if (d.x * d.x + d.z * d.z > (ITEMS.peelRadius + 6) ** 2) return false;
     this.peels.splice(i, 1);
-    this.spinOut(kart);
+    this.spinOut(kart, Items.spinSide(kart, peel.pos));
     this.events.push({ type: 'peelHit', kart: kart.index, owner: peel.owner, pos: peel.pos, peel: id });
     return true;
   }
@@ -281,7 +283,7 @@ export class Items {
       const lat = dot(rel, right) * side;
       const lon = dot(rel, fwd);
       if (lat < ITEMS.whackLateralMin || lat > ITEMS.whackLateralMax) continue;
-      if (Math.abs(lon) > ITEMS.whackLong || Math.abs(rel.y) > 2) continue;
+      if (Math.abs(lon) > ITEMS.whackLong || Math.abs(rel.y) > ITEMS.whackHeight) continue;
       const d = Math.hypot(lat, lon);
       if (!best || d < best.d) best = { kart: other, d };
     }
@@ -303,10 +305,7 @@ export class Items {
     const hit = this.target(kart, side, karts);
     if (!hit) return;
     const victim = hit.kart;
-    const v = victim.velocity;
-    victim.body.setLinvel(v3(v.x * ITEMS.whackKeep, v.y, v.z * ITEMS.whackKeep), true);
-    victim.wobbleTime = ITEMS.wobbleTime;
-    victim.body.applyImpulse(scale(kart.right, side * ITEMS.whackShove), true);
+    Items.whacked(victim, scale(kart.right, side));
     this.events.push({ type: 'whack', kart: kart.index, victim: victim.index, pos: victim.position });
   }
 
@@ -320,15 +319,38 @@ export class Items {
       const d = sub(pos, peel.pos);
       if (Math.abs(d.y) > 1.6 || d.x * d.x + d.z * d.z > r2) continue;
       this.peels.splice(i, 1);
-      this.spinOut(kart);
+      this.spinOut(kart, Items.spinSide(kart, peel.pos));
       this.events.push({ type: 'peelHit', kart: kart.index, owner: peel.owner, pos: peel.pos, peel: peel.id });
       return;
     }
   }
 
-  spinOut(kart: Kart): void {
+  /**
+   * Which way a peel spins `kart`: toward the side it was on (a peel under
+   * the right wheels whips the nose round to the right). Returns `Kart.spinDir`.
+   */
+  static spinSide(kart: Kart, at: Vec3): -1 | 1 {
+    return dot(sub(at, kart.position), kart.right) > 0 ? -1 : 1;
+  }
+
+  /**
+   * A snake connects: most of the speed gone, a long fishtailing wobble, a
+   * slowed engine, and a shove along `away` (unit, flat). Shared with the
+   * online client, which applies hits on its own kart.
+   */
+  static whacked(victim: Kart, away: Vec3): void {
+    const v = victim.velocity;
+    victim.body.setLinvel(v3(v.x * ITEMS.whackKeep, v.y, v.z * ITEMS.whackKeep), true);
+    victim.wobbleTime = Math.max(victim.wobbleTime, ITEMS.wobbleTime);
+    victim.slowTime = Math.max(victim.slowTime, ITEMS.whackSlow);
+    victim.boostTime = Math.min(victim.boostTime, victim.noBrakesTime);
+    victim.body.applyImpulse(scale(away, ITEMS.whackShove), true);
+  }
+
+  spinOut(kart: Kart, dir: -1 | 1 = 1): void {
     if (kart.immune) return;
     kart.spinTime = ITEMS.spinTime;
+    kart.spinDir = dir;
     kart.boostTime = 0;
   }
 }

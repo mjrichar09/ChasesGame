@@ -57,6 +57,13 @@ Playwright. Deploys to GitHub Pages (`.github/workflows/pages.yml`).
   road via `surfaceDrop`, no skirts), have `terrain` (sim/terrain.ts: physics + render
   ground from a height function) and `lava` (sim/lava.ts: a front that DNFs karts it
   catches on the ground; parrot flight is safe until you land).
+- `terraces` features (Coconut Cove's treetops): a run of flat platforms, each a drop
+  below the last, levels taken from the spline. Platforms flare wide where karts land
+  and taper to the next ledge; barriers there are taller (`WALL_ALOFT_HEIGHT`) because
+  landings rebound; terrain stays low under them (`Track.aloft`). Respawns are kept
+  clear of every gap's far edge — put down there, a kart tipped back off forever.
+- Shaped terrain without `lava` renders as a coast (`coastColour`, sea); with it, the
+  volcano. `TrackLook.shoreline` keeps scenery out of the sea.
 - Mid-race track changes live in `sim/events.ts` (definitions + timing by leader
   lap); `RaceSim.applyEvent` makes them physical (new hulls, rebuilt road collider,
   disabled barrier colliders, wider `waters`, `track.brush`). The renderer reads
@@ -81,6 +88,17 @@ Playwright. Deploys to GitHub Pages (`.github/workflows/pages.yml`).
   (`Track.kickerHalf`). `tests/track.test.ts` checks part-width ramps and pickups stay
   on the road and separate stretches never overlap. Keep chokes off chicanes and
   out of jump landings: both multiplied respawns in telemetry.
+- Particles: `render/fx.ts` is the cheap pooled point cloud for most puffs;
+  `render/vfx.ts` (three.quarks 0.16 — the last release that supports three 0.169)
+  does the showpieces: bursts from round-robin pools (sparks, dust rings, whack
+  stars and fur, banana bits, fireworks), per-kart trails whose rate the game sets
+  every frame (`Game.kartTrails`: boost, tyre and No Brakes smoke, wall-scrape
+  sparks, boulder grit, Too Cool glitter, parrot feathers), leaves/embers ahead of
+  the camera (`TrackLook.leaves`/`embers`), waves over a coast's ford
+  (`waveSpray`) and podium confetti. Kart-on-kart sparks are spotted from the
+  views (`Game.kartSparks`; the sim has no event, and online karts are proxies).
+  Emitters must stay under the Scene: three.quarks disposes a system whose
+  emitter has no Scene ancestor. Particles are render-only — never in the sim.
 - Looks: `render/polish.ts` (rim light, ink outlines on desktop, contact shadows,
   clouds/sun, roadside tufts); `Stage.render` runs bloom + grade + vignette on
   desktop only (`Quality.post`). Headless SwiftShader is very slow with post on —

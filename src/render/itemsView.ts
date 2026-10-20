@@ -2,8 +2,9 @@
  * Pickups and peels.
  *
  * A pickup floats, bobs and turns above a glowing ring of light so it reads
- * from far down the track — a banana bunch or a coiled snake, so you can see
- * what you are about to grab. Collected pickups vanish until the sim brings
+ * from far down the track — a banana, a coiled snake or a parrot, so you can
+ * see what you are about to grab. Each kind has its own ring colour (yellow,
+ * purple, cyan), with a solid band under the glow so it reads in bright sun. Collected pickups vanish until the sim brings
  * them back. Peels lie flat on the road where they were dropped, for as long
  * as they last (until somebody hits one).
  */
@@ -70,12 +71,23 @@ function peelMesh(): THREE.Group {
   return g;
 }
 
-/** Additive glowing ring + soft disc under a pickup. */
+/** Pickup sizes: the item itself, and its ring. */
+const PICKUP_SCALE = 1.5;
+const RING_SCALE = 1.35;
+
+/** Ring colours: solid band and glow, per kind. */
+export const ITEM_COLORS = { banana: 0xffd21f, snake: 0xa64dff, parrot: 0x29c8ff } as const;
+
+/** A solid coloured band with an additive glow, a soft disc and a light column, under a pickup. */
 function glowRing(color: number): THREE.Group {
   const g = new THREE.Group();
+  // Solid (not additive) so the colour holds against sunlit road and sky.
+  const band = new THREE.Mesh(new THREE.TorusGeometry(0.85, 0.11, 10, 40), new THREE.MeshBasicMaterial({ color }));
+  band.rotation.x = Math.PI / 2;
+  g.add(band);
   const ring = new THREE.Mesh(
-    new THREE.TorusGeometry(0.85, 0.07, 8, 32),
-    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false }),
+    new THREE.TorusGeometry(0.85, 0.2, 8, 40),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false }),
   );
   ring.rotation.x = Math.PI / 2;
   g.add(ring);
@@ -154,10 +166,13 @@ export class ItemsView {
       const banana = bananaBunch();
       const snake = coiledSnake();
       const parrot = buildPerchedParrot();
-      const ring = glowRing(0xffe14d);
-      const ringSnake = glowRing(0x7dff6a);
-      const ringParrot = glowRing(0x4dd2ff);
-      for (const o of [banana, snake, parrot]) o.position.y = 1.2;
+      const ring = glowRing(ITEM_COLORS.banana);
+      const ringSnake = glowRing(ITEM_COLORS.snake);
+      const ringParrot = glowRing(ITEM_COLORS.parrot);
+      for (const o of [banana, snake, parrot]) {
+        o.position.y = 1.2;
+        o.scale.multiplyScalar(PICKUP_SCALE);
+      }
       root.add(banana, snake, parrot, ring, ringSnake, ringParrot);
       this.group.add(root);
       this.pickups.push({ root, banana, snake, parrot, ring, ringSnake, ringParrot, phase: i * 1.7 });
@@ -173,10 +188,10 @@ export class ItemsView {
       v.parrot.visible = v.ringParrot.visible = p.kind === 'parrot';
       const bob = Math.sin(time * 2.4 + v.phase) * 0.18;
       for (const o of [v.banana, v.snake, v.parrot]) {
-        o.position.y = 1.25 + bob;
+        o.position.y = 1.5 + bob;
         o.rotation.y = time * 1.8 + v.phase;
       }
-      const pulse = 1 + Math.sin(time * 4 + v.phase) * 0.08;
+      const pulse = RING_SCALE * (1 + Math.sin(time * 4 + v.phase) * 0.08);
       for (const r of [v.ring, v.ringSnake, v.ringParrot]) r.scale.setScalar(pulse);
     });
 

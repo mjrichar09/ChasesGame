@@ -38,6 +38,7 @@ export interface KartStatus {
   airTime: number;
   boostTime: number;
   spinTime: number;
+  spinDir: -1 | 1;
   wobbleTime: number;
   flyTime: number;
   flyElapsed: number;
@@ -109,6 +110,7 @@ function writeStatus(w: Writer, k: KartStatus): void {
   w.time(k.airTime);
   w.time(k.boostTime);
   w.time(k.spinTime);
+  w.i8(k.spinDir);
   w.time(k.wobbleTime);
   w.time(k.flyTime);
   w.time(k.flyElapsed);
@@ -136,6 +138,7 @@ function readStatus(r: Reader): KartStatus {
     airTime: r.time(),
     boostTime: r.time(),
     spinTime: r.time(),
+    spinDir: r.i8() < 0 ? -1 : 1,
     wobbleTime: r.time(),
     flyTime: r.time(),
     flyElapsed: r.time(),
@@ -166,6 +169,7 @@ export function statusOf(k: Kart): KartStatus {
     airTime: k.airTime,
     boostTime: k.boostTime,
     spinTime: k.spinTime,
+    spinDir: k.spinDir,
     wobbleTime: k.wobbleTime,
     flyTime: k.flyTime,
     flyElapsed: k.flyElapsed,
@@ -198,6 +202,7 @@ export function applyStatus(k: Kart, s: KartStatus): void {
   k.airTime = s.airTime;
   k.boostTime = s.boostTime;
   k.spinTime = s.spinTime;
+  k.spinDir = s.spinDir;
   k.wobbleTime = s.wobbleTime;
   k.flyTime = s.flyTime;
   k.flyElapsed = s.flyElapsed;

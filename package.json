@@ -25,7 +25,8 @@
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.14.0",
     "peerjs": "^1.5.5",
-    "three": "^0.169.0"
+    "three": "^0.169.0",
+    "three.quarks": "^0.16.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",

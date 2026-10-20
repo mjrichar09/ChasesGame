@@ -10,7 +10,8 @@
  *   Pause   Esc / P               Look back  C (held)
  *
  * Pad (standard mapping): RT/LT pedals, left stick steers, A item,
- * LB/RB whack left/right, Start pauses.
+ * LB/RB snake swing left/right, X swagger (hold), Y look back, Start pauses.
+ * The bumpers do nothing else, so a quick left-right flurry is just swings.
  */
 
 import type { DriverInput } from '../sim/input.js';
@@ -55,9 +56,19 @@ export class Controls {
     return codes.some((c) => this.held.has(c));
   }
 
+  /**
+   * The controller to read. A standard-mapped pad wins over anything else
+   * the system reports (Windows can list a headset or a virtual device first,
+   * whose buttons 4/5 aren't the bumpers).
+   */
   private pad(): Gamepad | null {
-    for (const p of navigator.getGamepads?.() ?? []) if (p && p.connected) return p;
-    return null;
+    let any: Gamepad | null = null;
+    for (const p of navigator.getGamepads?.() ?? []) {
+      if (!p || !p.connected) continue;
+      if (p.mapping === 'standard') return p;
+      any ??= p;
+    }
+    return any;
   }
 
   sample(dt: number): DriverInput {
@@ -85,8 +96,8 @@ export class Controls {
       out.brake = Math.max(out.brake, btn(6), btn(13) > 0.5 ? 1 : 0);
       if (stick !== 0) out.steer = stick;
       out.item ||= btn(0) > 0.5;
-      // X, or both shoulders together, for swagger.
-      out.swagger ||= btn(2) > 0.5 || (btn(4) > 0.5 && btn(5) > 0.5);
+      out.swagger ||= btn(2) > 0.5;
+      // Bumpers: snake swings, left and right.
       out.whackLeft ||= btn(4) > 0.5;
       out.whackRight ||= btn(5) > 0.5;
       const pause = btn(9) > 0.5;

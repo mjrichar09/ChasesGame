@@ -17,12 +17,12 @@
  */
 
 import { type DriverInput, NEUTRAL_INPUT } from '../sim/input.js';
-import { ITEMS } from '../data/tuning.js';
 import type { AiDriver } from '../sim/driver.js';
-import type { ItemEvent } from '../sim/items.js';
+import { type ItemEvent, Items } from '../sim/items.js';
 import type { Quat, Vec3 } from '../sim/math.js';
 import { add, lerp, normalize, scale, sub, v3 } from '../sim/math.js';
 import type { RaceSim } from '../sim/race.js';
+import { roared } from '../sim/swagger.js';
 import type { Link } from './link.js';
 import {
   INTERP_DELAY,
@@ -418,20 +418,21 @@ export class NetClient {
       if (e.type === 'track') continue; // Played when we applied the change ourselves.
       if ('kart' in e && e.kart === own && PREDICTED.has(e.type)) continue;
       if (e.type === 'whack' && e.victim === own) this.whacked(sim, e.kart);
+      if (e.type === 'swagger' && e.move === 'roar' && e.phase === 'hit' && e.victims?.includes(own)) {
+        const me = sim.karts[own]!;
+        if (!me.immune && !me.flying) roared(me, e.pos);
+      }
       sim.items.events.push(e);
     }
     this.inbox = [];
   }
 
-  /** Someone's snake got us: lose speed, wobble, and get shoved away from them. */
+  /** Someone's snake got us: lose speed, wobble, slow down, and get shoved away from them. */
   private whacked(sim: RaceSim, by: number): void {
     const me = sim.karts[this.race!.own]!;
     if (me.immune || me.flying) return;
-    const v = me.velocity;
-    me.body.setLinvel(v3(v.x * ITEMS.whackKeep, v.y, v.z * ITEMS.whackKeep), true);
-    me.wobbleTime = ITEMS.wobbleTime;
     const away = sub(me.position, sim.karts[by]!.position);
-    me.body.applyImpulse(scale(normalize(v3(away.x, 0, away.z)), ITEMS.whackShove), true);
+    Items.whacked(me, normalize(v3(away.x, 0, away.z)));
   }
 }
 
