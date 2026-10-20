@@ -10,7 +10,7 @@
  *   Pause   Esc / P               Look back  C (held)
  *
  * Pad (standard mapping): RT/LT pedals, left stick steers, A item,
- * LB/RB snake swing left/right, X swagger (hold), Y look back, Start pauses.
+ * LB/RB snake swing (or coconut fling) left/right, X swagger (hold), Y look back, Start pauses.
  * The bumpers do nothing else, so a quick left-right flurry is just swings.
  */
 
@@ -97,7 +97,7 @@ export class Controls {
       if (stick !== 0) out.steer = stick;
       out.item ||= btn(0) > 0.5;
       out.swagger ||= btn(2) > 0.5;
-      // Bumpers: snake swings, left and right.
+      // Bumpers: snake swings (or coconut flings), left and right.
       out.whackLeft ||= btn(4) > 0.5;
       out.whackRight ||= btn(5) > 0.5;
       const pause = btn(9) > 0.5;

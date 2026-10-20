@@ -51,7 +51,7 @@ const FORWARD = new THREE.Vector3(0, 0, 1);
 const TURN = Math.PI * 2;
 
 /** Per-kart looping effects, set every frame by the game. */
-export type TrailKind = 'boost' | 'tyre' | 'burn' | 'scrape' | 'chips' | 'feathers' | 'cool';
+export type TrailKind = 'boost' | 'tyre' | 'burn' | 'scrape' | 'chips' | 'rubble' | 'feathers' | 'cool';
 
 type Params = ConstructorParameters<typeof ParticleSystem>[0];
 
@@ -222,6 +222,8 @@ const TRAILS: Record<TrailKind, () => ParticleSystem> = {
       renderMode: RenderMode.BillBoard,
       behaviors: [down(18), tumble(10)],
     }),
+  // ...and the dust it grinds up, rolling out from under it.
+  rubble: () => smoke([[0xc9b48e, 0], [0xa39c90, 0.5], [0x8f897f, 1]], 0.5, [1.3, 2.0], 3, [0.8, 1.4]),
   // Macaw feathers drifting down from the parrot overhead.
   feathers: () =>
     stream({

@@ -3,8 +3,8 @@
 Eight gorillas. Junk karts. Too many bananas.
 
 A 3rd-person kart racer for the browser (desktop and phone). Race seven AI
-gorillas over three laps: bouncy suspension, kicker ramps, banana boosts and
-Road Rash-style snake whacks. The corners want braking — overcook one and you
+gorillas over three laps: bouncy suspension, kicker ramps, banana boosts,
+Road Rash-style snake whacks and flung coconuts. The corners want braking — overcook one and you
 slide into the logs.
 
 - **Vine Valley** — sunny and fast: a broad start straight, a single-file squeeze through the ferns, and a river gap to clear.
@@ -40,7 +40,7 @@ npm run dev        # http://localhost:5174
 | Drive / brake | W S / ↑ ↓ | RT / LT | GAS / BRAKE buttons |
 | Steer | A D / ← → | left stick | drag on the left half |
 | Banana (or snake) | Space | A | 🍌 button |
-| Whack left / right | Q / E | LB / RB | 🐍 buttons |
+| Whack (or fling a coconut) left / right | Q / E | LB / RB | 🐍 / 🥥 buttons |
 | Swagger move (hold) | F | X | gold ★ button (pops up left of the snake buttons when the meter is full) |
 | Look back | C (hold) | Y | — |
 | Pause / quit | Esc | Start | ⏸ button |
@@ -52,6 +52,10 @@ npm run dev        # http://localhost:5174
   Peels stay until someone hits one, and spin you toward the side they were on.
 - **Snake** (purple ring): three swings, left or right, at whoever is alongside —
   a hit takes most of their speed, fishtails them and slows them for a couple of seconds.
+- **Coconut** (orange ring): one throw, flung sidearm at whoever is in front — up
+  to six kart lengths ahead. Q / E (or the left / right buttons) bend it left or
+  right; the item button throws it straight, or bends it toward the nearest kart.
+  A hit costs half your speed and leaves you wobbling.
 - **Parrot** (blue ring): a giant macaw carries you for 6 s. Steer and set the pace;
   fly over peels and snakes, or cut straight across the infield to a later part of the lap.
 - One item at a time — a full hand drives straight through pickups.
@@ -70,7 +74,7 @@ gorilla's signature move:
 | Tiny Tank | **Pogo** — a huge bounce over gaps, peels and rivals |
 | DJ Banana | **Drop the Beat** — rivals' steering swaps for 3 s |
 | Smooth Steve | **Too Cool** — 3 s immune to everything, lava included |
-| Granite Gus | **Boulder** — a heavy rolling rock that shoves karts aside |
+| Granite Gus | **Boulder** — rolls as a heavy rock that shoves karts aside |
 
 Swagger can be switched off on the select screen for pure racing.
 

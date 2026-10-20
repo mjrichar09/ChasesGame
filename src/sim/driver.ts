@@ -336,6 +336,25 @@ export class AiDriver {
       }
       return none;
     }
+    if (kart.item === 'coconut') {
+      // Fling it when a throw would connect (bent whichever way does). A
+      // rookie throws at nothing now and then; anyone gets bored of holding it.
+      const shot = items.shot(kart, karts);
+      const bored = this.holding > 30 + this.me.patience;
+      if (!shot && !bored && this.rng.next() >= (1 - iq) * 0.03 * dt) {
+        this.sighted = 0;
+        return none;
+      }
+      // Reaction time: the shot has to be on for a moment first.
+      this.sighted += dt;
+      if (shot && this.sighted < 0.1 + (1 - iq) * 0.5) return none;
+      this.sighted = 0;
+      this.pressed = true;
+      this.holding = 0;
+      // ...and a slow reader bends it the wrong way now and then.
+      const side = shot && this.rng.next() < (1 - iq) * 0.25 ? -(shot.side || 1) : (shot?.side ?? 0);
+      return side === 0 ? { ...none, item: true } : side < 0 ? { ...none, whackLeft: true } : { ...none, whackRight: true };
+    }
     // Snake.
     if (kart.swingCooldown > 0) return none;
     // Rookies sometimes swing at thin air.

@@ -2,8 +2,8 @@
  * Junk karts the gorillas built themselves, one style per gorilla.
  *
  * Every kart shares the same rig — chassis, four wheels on visible coil
- * springs, a steering wheel, and a seat for the gorilla — so the kart view can
- * animate any of them from the sim. The springs are drawn on purpose: they
+ * springs and stub axles, a steering wheel, and a seat with a backrest for
+ * the gorilla — so the kart view can animate any of them from the sim. The springs are drawn on purpose: they
  * stretch and squash with the real suspension, which is where most of the
  * game's bounce reads on screen.
  *
@@ -60,6 +60,7 @@ export function buildKart(g: Gorilla): KartRig {
   root.add(body);
   const b = new PartBuilder();
   const seatY = chassis(b, body, g.kart, g.kartColor, g.kartTrim);
+  seat(b, body, g, seatY);
 
   // Steering column and wheel.
   const steeringWheel = new THREE.Group();
@@ -88,6 +89,7 @@ export function buildKart(g: Gorilla): KartRig {
     const spin = new THREE.Group();
     steer.add(spin);
     wheel(b, spin, g.kart, Math.sign(x), g.kartTrim);
+    axle(b, node, Math.sign(x));
     const spring = new THREE.Mesh(coil(), springMat);
     spring.position.copy(mount);
     root.add(spring);
@@ -112,7 +114,7 @@ function chassis(b: PartBuilder, body: THREE.Group, style: KartStyle, color: num
     case 'logRaft': {
       for (const x of [-0.6, -0.2, 0.2, 0.6]) {
         b.add(body, GEO.cylinder, main, { pos: [x, 0, 0], rot: [Math.PI / 2, 0, 0], scale: [0.2, 2.4, 0.2] });
-        b.add(body, GEO.cylinder, toon(0xc79a62), { pos: [x, 0, 1.2], rot: [Math.PI / 2, 0, 0], scale: [0.17, 0.02, 0.17] });
+        b.add(body, GEO.cylinder, toon(0xc79a62), { pos: [x, 0, 1.21], rot: [Math.PI / 2, 0, 0], scale: [0.17, 0.02, 0.17] });
       }
       for (const z of [-0.8, 0.8]) b.add(body, GEO.torus, vine, { pos: [0, 0, z], scale: [0.85, 0.3, 0.6] });
       b.add(body, GEO.box, wood, { pos: [0, 0.22, -0.3], scale: [0.7, 0.08, 0.6] });
@@ -126,10 +128,11 @@ function chassis(b: PartBuilder, body: THREE.Group, style: KartStyle, color: num
     }
     case 'crate': {
       b.add(body, GEO.box, main, { pos: [0, 0, 0], scale: [1.5, 0.6, 2.3] });
-      for (const z of [-1.1, 0, 1.1]) b.add(body, GEO.box, toon(0x8c6a3c), { pos: [0, 0, z], scale: [1.54, 0.64, 0.1] });
+      // Slats stand proud of the box everywhere — flush faces flicker.
+      for (const z of [-1.13, 0, 1.13]) b.add(body, GEO.box, toon(0x8c6a3c), { pos: [0, 0, z], scale: [1.54, 0.64, 0.1] });
       b.add(body, GEO.box, toon(0x8c6a3c), { pos: [0, 0, 0], rot: [0.26, 0, 0], scale: [1.56, 0.08, 2.3] });
-      b.add(body, GEO.box, accent, { pos: [0.77, 0, 0.5], scale: [0.02, 0.3, 0.3] });
-      b.add(body, GEO.box, accent, { pos: [-0.77, 0, 0.5], scale: [0.02, 0.3, 0.3] });
+      b.add(body, GEO.box, accent, { pos: [0.8, 0, 0.5], scale: [0.02, 0.3, 0.3] });
+      b.add(body, GEO.box, accent, { pos: [-0.8, 0, 0.5], scale: [0.02, 0.3, 0.3] });
       return 0.3;
     }
     case 'bamboo': {
@@ -175,6 +178,62 @@ function chassis(b: PartBuilder, body: THREE.Group, style: KartStyle, color: num
       return 0.26;
     }
   }
+}
+
+/** What each kart's seat is made of: cushion and frame. */
+const SEATS: Record<KartStyle, { pad: number; frame: number }> = {
+  logRaft: { pad: 0x5b8c3a, frame: 0x6e4524 },
+  barrel: { pad: 0x2f2f33, frame: 0x4d2e17 },
+  crate: { pad: 0x3c6e9e, frame: 0x8c6a3c },
+  bamboo: { pad: 0xc9b47a, frame: 0x8c9a3c },
+  canoe: { pad: 0xe0c060, frame: 0x1d5f52 },
+  tire: { pad: 0xffcc1f, frame: 0x3d3d40 },
+  bathtub: { pad: 0xf29f3c, frame: 0xd8b448 },
+  stone: { pad: 0x5f8f3e, frame: 0x7c776d },
+};
+
+/**
+ * A bucket seat under the gorilla: a cushion, a reclined backrest with a
+ * rolled top, and two posts down into the chassis, so the gorilla sits *in*
+ * the kart instead of hovering on it. Sized to the gorilla.
+ */
+function seat(b: PartBuilder, body: THREE.Group, g: Gorilla, seatY: number): void {
+  const { pad, frame } = SEATS[g.kart];
+  const padMat = toon(pad);
+  const frameMat = toon(frame);
+  const w = (0.5 + 0.42 * g.bulk) * g.size;
+  // The gorilla sits at z = -0.25; its back is about 0.5 m behind that.
+  const backZ = -0.25 - 0.5 * g.size - 0.07;
+  b.add(body, GEO.box, frameMat, { pos: [0, seatY - 0.09, -0.3], scale: [w + 0.08, 0.06, 0.78] });
+  b.add(body, GEO.box, padMat, { pos: [0, seatY - 0.03, -0.27], scale: [w - 0.06, 0.08, 0.68] });
+  // Backrest: frame, cushion and a rolled top, leaning back.
+  const lean = -0.22;
+  const h = 0.62 * g.size;
+  const up = (d: number): [number, number, number] => [0, seatY + 0.02 + Math.cos(lean) * d, backZ + Math.sin(lean) * d];
+  b.add(body, GEO.box, frameMat, { pos: up(h / 2), rot: [lean, 0, 0], scale: [w + 0.08, h, 0.07] });
+  const [, py, pz] = up(h / 2);
+  b.add(body, GEO.box, padMat, { pos: [0, py, pz + 0.06], rot: [lean, 0, 0], scale: [w - 0.06, h - 0.1, 0.07] });
+  b.add(body, GEO.cylinder, padMat, { pos: up(h), rot: [0, 0, Math.PI / 2], scale: [0.07, w + 0.1, 0.07] });
+  // Posts down into the chassis.
+  for (const x of [-1, 1]) {
+    b.add(body, GEO.cylinder, frameMat, { pos: [x * (w / 2 - 0.04), seatY - 0.3, -0.3], scale: [0.04, 0.42, 0.04] });
+    b.add(body, GEO.cylinder, frameMat, { pos: [x * (w / 2 - 0.04), seatY - 0.2, backZ + 0.02], scale: [0.04, 0.4, 0.04] });
+  }
+}
+
+/**
+ * A stub axle from the hub in under the chassis, with a collar at the hub.
+ * It rides with the wheel's suspension (on the wheel node), and does not
+ * steer — the front wheels turn on their hubs at its end.
+ */
+function axle(b: PartBuilder, node: THREE.Group, side: number): void {
+  const steel = toon(0x45454b);
+  const inner = 0.22;
+  const len = KART.wheelX - inner;
+  b.add(node, GEO.cylinder, steel, { pos: [-side * len / 2, 0, 0], rot: [0, 0, Math.PI / 2], scale: [0.05, len, 0.05] });
+  b.add(node, GEO.cylinder, steel, { pos: [-side * 0.12, 0, 0], rot: [0, 0, Math.PI / 2], scale: [0.09, 0.07, 0.09] });
+  // Where it meets the frame: a block the spring can sit on.
+  b.add(node, GEO.box, toon(0x2e2e33), { pos: [-side * (len - 0.05), 0, 0], scale: [0.16, 0.12, 0.16] });
 }
 
 function wheel(b: PartBuilder, spin: THREE.Group, style: KartStyle, side: number, trim: number): void {

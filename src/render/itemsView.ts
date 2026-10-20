@@ -1,12 +1,15 @@
 /**
- * Pickups and peels.
+ * Pickups, peels and coconuts.
  *
  * A pickup floats, bobs and turns above a glowing ring of light so it reads
- * from far down the track — a banana, a coiled snake or a parrot, so you can
- * see what you are about to grab. Each kind has its own ring colour (yellow,
- * purple, cyan), with a solid band under the glow so it reads in bright sun. Collected pickups vanish until the sim brings
+ * from far down the track — a banana, a coiled snake, a parrot or a coconut,
+ * so you can see what you are about to grab. Each kind has its own ring
+ * colour (yellow, purple, cyan, orange), with a solid band under the glow so
+ * it reads in bright sun. Collected pickups vanish until the sim brings
  * them back. Peels lie flat on the road where they were dropped, for as long
- * as they last (until somebody hits one).
+ * as they last (until somebody hits one). Thrown coconuts tumble through the
+ * air where the sim has them; one that runs out of range bounces and rolls
+ * away (drawn only — the sim is done with it).
  */
 
 import * as THREE from 'three';
@@ -37,6 +40,35 @@ function bananaBunch(): THREE.Group {
   b.add(g, GEO.cylinder, toon(0x6b8f2a), { pos: [0, 0.12, 0.38], rot: [Math.PI / 2, 0, 0], scale: [0.06, 0.15, 0.06] });
   b.build(false);
   g.scale.setScalar(2.2);
+  return g;
+}
+
+/**
+ * A hairy brown coconut, radius 1 (callers scale it): a shell, tufts of
+ * fibre, and the three dark "eyes" at one end.
+ */
+export function coconutModel(glow = false): THREE.Group {
+  const g = new THREE.Group();
+  const b = new PartBuilder();
+  const shell = toon(0x6b4325, glow ? { emissive: 0x2a1404 } : {});
+  const hair = toon(0x8a5a33);
+  const dark = toon(0x3a2414);
+  b.add(g, GEO.sphere, shell, { scale: [1, 0.92, 1.08] });
+  // Fibre: little flat wisps all over, leaning back along the shell.
+  for (let i = 0; i < 22; i++) {
+    const y = 1 - ((i + 0.5) / 22) * 2;
+    const r = Math.sqrt(1 - y * y);
+    const a = i * 2.39996;
+    const n = new THREE.Vector3(Math.cos(a) * r, y * 0.92, Math.sin(a) * r * 1.08);
+    const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), n.clone().normalize());
+    const e = new THREE.Euler().setFromQuaternion(q);
+    b.add(g, GEO.cone, i % 3 ? hair : shell, { pos: [n.x * 0.98, n.y * 0.98, n.z * 0.98], rot: [e.x, e.y, e.z], scale: [0.16, 0.26, 0.05] });
+  }
+  for (let i = 0; i < 3; i++) {
+    const a = (i / 3) * Math.PI * 2;
+    b.add(g, GEO.sphereLo, dark, { pos: [Math.sin(a) * 0.24, Math.cos(a) * 0.24, 1.02], scale: [0.13, 0.13, 0.06] });
+  }
+  b.build(false);
   return g;
 }
 
@@ -76,7 +108,7 @@ const PICKUP_SCALE = 1.5;
 const RING_SCALE = 1.35;
 
 /** Ring colours: solid band and glow, per kind. */
-export const ITEM_COLORS = { banana: 0xffd21f, snake: 0xa64dff, parrot: 0x29c8ff } as const;
+export const ITEM_COLORS = { banana: 0xffd21f, snake: 0xa64dff, parrot: 0x29c8ff, coconut: 0xff7a1f } as const;
 
 /** A solid coloured band with an additive glow, a soft disc and a light column, under a pickup. */
 function glowRing(color: number): THREE.Group {
@@ -140,15 +172,24 @@ function beamTexture(): THREE.Texture {
   return beamTex;
 }
 
+type PickupKind = keyof typeof ITEM_COLORS;
+
 interface PickupView {
   root: THREE.Group;
-  banana: THREE.Group;
-  snake: THREE.Group;
-  parrot: THREE.Group;
-  ring: THREE.Group;
-  ringSnake: THREE.Group;
-  ringParrot: THREE.Group;
+  /** The floating item and its ring, per kind. */
+  kinds: Record<PickupKind, { item: THREE.Group; ring: THREE.Group }>;
   phase: number;
+}
+
+/** Thrown coconuts: this size in the air and on the road, m. */
+const COCONUT_R = 0.32;
+
+/** A coconut that ran out of range, bouncing and rolling to a stop. */
+interface Dropped {
+  obj: THREE.Group;
+  vel: THREE.Vector3;
+  ground: number;
+  t: number;
 }
 
 export class ItemsView {
@@ -158,42 +199,105 @@ export class ItemsView {
   private readonly peelProto = peelMesh();
   private readonly loose = new Map<number, THREE.Group>();
   private readonly bunchProto = bananaBunch();
+  private readonly coconutProto = coconutModel();
+  private readonly flying = new Map<number, THREE.Group>();
+  private readonly dropped: Dropped[] = [];
+  private lastTime = -1;
 
   constructor(items: Items) {
+    const makers: Record<PickupKind, () => THREE.Group> = {
+      banana: bananaBunch,
+      snake: coiledSnake,
+      parrot: buildPerchedParrot,
+      coconut: () => {
+        const c = coconutModel(true);
+        c.scale.setScalar(0.42);
+        return c;
+      },
+    };
     items.pickups.forEach((p, i) => {
       const root = new THREE.Group();
       root.position.set(p.pos.x, p.pos.y - 1.1, p.pos.z);
-      const banana = bananaBunch();
-      const snake = coiledSnake();
-      const parrot = buildPerchedParrot();
-      const ring = glowRing(ITEM_COLORS.banana);
-      const ringSnake = glowRing(ITEM_COLORS.snake);
-      const ringParrot = glowRing(ITEM_COLORS.parrot);
-      for (const o of [banana, snake, parrot]) {
-        o.position.y = 1.2;
-        o.scale.multiplyScalar(PICKUP_SCALE);
+      const kinds = {} as PickupView['kinds'];
+      for (const kind of Object.keys(makers) as PickupKind[]) {
+        const item = makers[kind]();
+        item.position.y = 1.2;
+        item.scale.multiplyScalar(PICKUP_SCALE);
+        const ring = glowRing(ITEM_COLORS[kind]);
+        root.add(item, ring);
+        kinds[kind] = { item, ring };
       }
-      root.add(banana, snake, parrot, ring, ringSnake, ringParrot);
       this.group.add(root);
-      this.pickups.push({ root, banana, snake, parrot, ring, ringSnake, ringParrot, phase: i * 1.7 });
+      this.pickups.push({ root, kinds, phase: i * 1.7 });
     });
   }
 
+  /** A coconut out of range at `at`: it falls to `ground` and bounces along. */
+  drop(at: THREE.Vector3, vel: THREE.Vector3, ground: number): void {
+    const obj = this.coconutProto.clone();
+    obj.scale.setScalar(COCONUT_R);
+    obj.position.copy(at);
+    this.group.add(obj);
+    this.dropped.push({ obj, vel: vel.clone().multiplyScalar(0.55), ground, t: 0 });
+  }
+
   update(items: Items, time: number): void {
+    const dt = this.lastTime < 0 ? 0 : Math.min(0.1, Math.max(0, time - this.lastTime));
+    this.lastTime = time;
     items.pickups.forEach((p, i) => {
       const v = this.pickups[i]!;
       v.root.visible = p.active;
-      v.banana.visible = v.ring.visible = p.kind === 'banana';
-      v.snake.visible = v.ringSnake.visible = p.kind === 'snake';
-      v.parrot.visible = v.ringParrot.visible = p.kind === 'parrot';
       const bob = Math.sin(time * 2.4 + v.phase) * 0.18;
-      for (const o of [v.banana, v.snake, v.parrot]) {
-        o.position.y = 1.5 + bob;
-        o.rotation.y = time * 1.8 + v.phase;
-      }
       const pulse = RING_SCALE * (1 + Math.sin(time * 4 + v.phase) * 0.08);
-      for (const r of [v.ring, v.ringSnake, v.ringParrot]) r.scale.setScalar(pulse);
+      for (const kind of Object.keys(v.kinds) as PickupKind[]) {
+        const { item, ring } = v.kinds[kind];
+        item.visible = ring.visible = p.kind === kind;
+        item.position.y = 1.5 + bob;
+        item.rotation.y = time * 1.8 + v.phase;
+        ring.scale.setScalar(pulse);
+      }
     });
+
+    // Coconuts in the air, tumbling end over end.
+    const liveNuts = new Set<number>();
+    for (const c of items.coconuts) {
+      liveNuts.add(c.id);
+      let m = this.flying.get(c.id);
+      if (!m) {
+        m = this.coconutProto.clone();
+        m.scale.setScalar(COCONUT_R);
+        this.group.add(m);
+        this.flying.set(c.id, m);
+      }
+      m.position.set(c.pos.x, c.pos.y, c.pos.z);
+      m.rotation.set(c.age * 22, Math.atan2(c.vel.x, c.vel.z), c.age * 6);
+    }
+    for (const [id, m] of this.flying) {
+      if (liveNuts.has(id)) continue;
+      this.group.remove(m);
+      this.flying.delete(id);
+    }
+    // Dropped ones: bounce, roll, settle, and sink away.
+    for (let i = this.dropped.length - 1; i >= 0; i--) {
+      const d = this.dropped[i]!;
+      d.t += dt;
+      d.vel.y -= 16 * dt;
+      d.obj.position.addScaledVector(d.vel, dt);
+      const floor = d.ground + COCONUT_R;
+      if (d.obj.position.y < floor) {
+        d.obj.position.y = floor;
+        d.vel.y = Math.abs(d.vel.y) * 0.35;
+        d.vel.x *= 0.7;
+        d.vel.z *= 0.7;
+      }
+      const speed = Math.hypot(d.vel.x, d.vel.z);
+      d.obj.rotation.x += (speed / COCONUT_R) * dt;
+      if (d.t > 2.2) d.obj.position.y -= (d.t - 2.2) * 0.6;
+      if (d.t > 3) {
+        this.group.remove(d.obj);
+        this.dropped.splice(i, 1);
+      }
+    }
 
     // Loose bunches (Feed the Troop): bob and spin until someone grabs them.
     const liveLoose = new Set<number>();

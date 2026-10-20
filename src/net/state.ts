@@ -17,7 +17,7 @@ import type { EventPhase } from '../sim/events.js';
 import type { RaceSim } from '../sim/race.js';
 import { Reader, Writer } from './bin.js';
 
-const ITEM_KINDS: readonly ItemKind[] = ['none', 'banana', 'snake', 'parrot'];
+const ITEM_KINDS: readonly ItemKind[] = ['none', 'banana', 'snake', 'parrot', 'coconut'];
 const PHASES: readonly EventPhase[] = ['idle', 'warning', 'active'];
 const MSG_SNAPSHOT = 1;
 const MSG_REPORT = 2;
@@ -53,6 +53,8 @@ export interface KartStatus {
   showOff: number;
   swingSide: -1 | 0 | 1;
   swingTime: number;
+  throwSide: -1 | 0 | 1;
+  throwTime: number;
 }
 
 export interface KartSnap extends KartStatus {
@@ -125,6 +127,8 @@ function writeStatus(w: Writer, k: KartStatus): void {
   w.time(k.showOff);
   w.i8(k.swingSide);
   w.time(k.swingTime);
+  w.i8(k.throwSide);
+  w.time(k.throwTime);
 }
 
 function readStatus(r: Reader): KartStatus {
@@ -153,6 +157,8 @@ function readStatus(r: Reader): KartStatus {
     showOff: r.time(),
     swingSide: r.i8() as -1 | 0 | 1,
     swingTime: r.time(),
+    throwSide: r.i8() as -1 | 0 | 1,
+    throwTime: r.time(),
   };
 }
 
@@ -184,6 +190,8 @@ export function statusOf(k: Kart): KartStatus {
     showOff: k.showOff,
     swingSide: k.swingSide,
     swingTime: k.swingTime,
+    throwSide: k.throwSide,
+    throwTime: k.throwTime,
   };
 }
 
@@ -217,6 +225,8 @@ export function applyStatus(k: Kart, s: KartStatus): void {
   k.showOff = s.showOff;
   k.swingSide = s.swingSide;
   k.swingTime = s.swingTime;
+  k.throwSide = s.throwSide;
+  k.throwTime = s.throwTime;
 }
 
 /**
@@ -262,7 +272,7 @@ export function packSnapshot(sim: RaceSim, tick: number, ai: readonly boolean[],
 function packItems(w: Writer, sim: RaceSim): void {
   const items = sim.items;
   w.u8(items.pickups.length);
-  for (const p of items.pickups) w.u8((p.active ? 4 : 0) | ITEM_KINDS.indexOf(p.kind));
+  for (const p of items.pickups) w.u8((p.active ? 8 : 0) | ITEM_KINDS.indexOf(p.kind));
   const peels = items.peels.filter((p) => p.id > 0);
   w.u8(peels.length);
   for (const p of peels) {
@@ -332,7 +342,7 @@ export function unpackSnapshot(buf: ArrayBuffer): Snapshot {
   if (r.u8()) {
     const pickups = Array.from({ length: r.u8() }, () => {
       const b = r.u8();
-      return { active: (b & 4) !== 0, kind: (ITEM_KINDS[b & 3] ?? 'banana') as Exclude<ItemKind, 'none'> };
+      return { active: (b & 8) !== 0, kind: (ITEM_KINDS[b & 7] ?? 'banana') as Exclude<ItemKind, 'none'> };
     });
     const peels = Array.from({ length: r.u8() }, () => ({ id: r.u16(), pos: r.vec(), yaw: r.i16() / 10000, owner: r.u8() }));
     const loose = Array.from({ length: r.u8() }, () => ({ id: r.u16(), pos: r.vec() }));

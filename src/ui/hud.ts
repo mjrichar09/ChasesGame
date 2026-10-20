@@ -165,7 +165,7 @@ export class Hud {
       this.lastItem = key;
       this.item.dataset.kind = kart.item;
       this.item.querySelector('.icon')!.textContent =
-        kart.item === 'banana' ? '🍌' : kart.item === 'snake' ? '🐍' : kart.item === 'parrot' ? '🦜' : '';
+        kart.item === 'banana' ? '🍌' : kart.item === 'snake' ? '🐍' : kart.item === 'parrot' ? '🦜' : kart.item === 'coconut' ? '🥥' : '';
       this.pips.innerHTML = '<i></i>'.repeat(kart.item === 'none' ? 0 : kart.charges);
       if (kart.item !== 'none') this.item.classList.remove('pop'), void this.item.offsetWidth, this.item.classList.add('pop');
     }

@@ -73,6 +73,11 @@ Playwright. Deploys to GitHub Pages (`.github/workflows/pages.yml`).
 - Phones go fullscreen on a tap (`ui/fullscreen.ts`: the Fullscreen API needs a
   gesture; touchend/click count, pointerdown doesn't). iPhone Safari can't: the manifest
   (`public/manifest.webmanifest`) and apple meta tags make a home-screen launch fullscreen.
+- Coconuts (`sim/items.ts`) are the one projectile: they fly in the sim (`Items.coconuts`,
+  stepped on every phone so they can be drawn) but only the host decides hits (`conk`).
+  `Items.shot` flies each bend against karts carried on along their velocity — the AI
+  only throws when one connects, and the item button bends toward that kart. A client
+  launches other karts' coconuts from the host's `throw` event and plays its own drops.
 - Swagger lives in `sim/swagger.ts` (meter, earnings/costs, hold → wind-up → move,
   `goodMoment` for the AI). Moves come from `RaceOptions.moves` (roster order =
   `MOVES`). Overtakes only pay once a place is held 0.6 s (side-by-side karts
@@ -99,6 +104,10 @@ Playwright. Deploys to GitHub Pages (`.github/workflows/pages.yml`).
   views (`Game.kartSparks`; the sim has no event, and online karts are proxies).
   Emitters must stay under the Scene: three.quarks disposes a system whose
   emitter has no Scene ancestor. Particles are render-only — never in the sim.
+- Roadside palms and broadleaf trees are built in `render/flora.ts` (fronds of single
+  leaflet triangles, lumpy leaf clumps) and instanced by `trackView.scenery`; keep them
+  inside the trunk/crown envelopes `sim/props.ts` makes solid. Karts (`render/kartModel.ts`)
+  have seats and stub axles; never leave two faces flush (the crate's slats flickered).
 - Looks: `render/polish.ts` (rim light, ink outlines on desktop, contact shadows,
   clouds/sun, roadside tufts); `Stage.render` runs bloom + grade + vignette on
   desktop only (`Quality.post`). Headless SwiftShader is very slow with post on —

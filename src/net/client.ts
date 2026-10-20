@@ -47,7 +47,7 @@ const STALL_AFTER = 1.0;
 const MAX_LEAD = 0.25;
 
 /** Own-kart events this phone already played when they happened. */
-const PREDICTED = new Set<ItemEvent['type']>(['boost', 'peelDrop', 'swing', 'parrot', 'swagger', 'peelHit', 'bonk']);
+const PREDICTED = new Set<ItemEvent['type']>(['boost', 'peelDrop', 'swing', 'throw', 'parrot', 'swagger', 'peelHit', 'bonk']);
 
 export interface ClientRace {
   sim: RaceSim;
@@ -416,8 +416,16 @@ export class NetClient {
     const own = this.race!.own;
     for (const e of this.inbox) {
       if (e.type === 'track') continue; // Played when we applied the change ourselves.
+      // Coconuts fly here as well as on the host, and drop here when they run out.
+      if (e.type === 'coconutDrop') continue;
       if ('kart' in e && e.kart === own && PREDICTED.has(e.type)) continue;
       if (e.type === 'whack' && e.victim === own) this.whacked(sim, e.kart);
+      if (e.type === 'throw') sim.items.launch(e.kart, e.pos, e.vel, e.curve, e.life);
+      if (e.type === 'conk') {
+        sim.items.dropCoconut(e.kart);
+        const me = sim.karts[own]!;
+        if (e.victim === own && !me.immune && !me.flying) Items.conked(me, e.vel);
+      }
       if (e.type === 'swagger' && e.move === 'roar' && e.phase === 'hit' && e.victims?.includes(own)) {
         const me = sim.karts[own]!;
         if (!me.immune && !me.flying) roared(me, e.pos);

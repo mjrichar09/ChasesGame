@@ -64,8 +64,8 @@ const FIREWORKS = [0xff4d6d, 0xffd23a, 0x29c8ff, 0x7dff6a, 0xd05cf6];
 const params = new URLSearchParams(location.search);
 const DEV_LAPS = Number(params.get('laps')) || undefined;
 const AUTOPILOT = params.has('autopilot');
-/** `?give=parrot` (or banana/snake): hand the player that item at GO, for testing. */
-const GIVE = params.get('give') as 'banana' | 'snake' | 'parrot' | 'swagger' | null;
+/** `?give=parrot` (or banana/snake/coconut): hand the player that item at GO, for testing. */
+const GIVE = params.get('give') as 'banana' | 'snake' | 'parrot' | 'coconut' | 'swagger' | null;
 /** `?eventlap=1`: mid-race track events fire on that lap instead (testing). */
 const EVENT_LAP = Number(params.get('eventlap')) || 0;
 /** `?room=1234`: an invite link — open the online screen with the code filled in. */
@@ -85,6 +85,8 @@ export class Game {
   /** Kart positions last frame and a cooldown per pair, for spotting kart-on-kart hits. */
   private bumpPrev: THREE.Vector3[] = [];
   private bumpCool = new Map<number, number>();
+  /** Each kart's boulder time last frame, to see the rock crumble. */
+  private wasBoulder: number[] = [];
   /** Each kart's velocity as drawn (works for online proxies too). */
   private viewVel: THREE.Vector3[] = [];
   /** A wave surging across the ford (coast tracks): seconds to the next, and the one running. */
@@ -520,6 +522,7 @@ export class Game {
     this.vfx.clear();
     this.bumpPrev = [];
     this.bumpCool.clear();
+    this.wasBoulder = [];
     this.viewVel = [];
     this.wave = null;
     this.podiumAt = null;
@@ -833,6 +836,34 @@ export class Game {
             this.cam.kick(0.6);
           }
           break;
+        case 'throw':
+          if (vol > 0) this.sound.play('swing', vol);
+          this.voice('grunt', e.kart, vol);
+          break;
+        case 'conk': {
+          // The shell cracks: husk and white flesh flying, stars, and a ring.
+          const at = v(e.pos);
+          const along = v(e.vel).setY(0).normalize();
+          this.fx.emit({ pos: at, count: 26, color: [0x6b4325, 0x8a5a33, 0xf3ead2], speed: [3, 9], dir: along.clone().setY(0.6), spread: 0.9, size: [0.2, 0.45], life: [0.4, 0.9], gravity: 16 });
+          this.vfx.whacked(at.clone().setY(at.y + 0.5), this.roster[e.victim]!.fur);
+          this.ring(at, 0xffffff, 2.4, 0.3);
+          if (vol > 0 || e.victim === this.player) this.sound.play('whack', Math.max(vol, e.victim === this.player ? 1 : 0));
+          this.views[e.kart]?.celebrate(1.5, true);
+          this.voice('ouch', e.victim, e.victim === this.player ? 1 : vol);
+          if (e.kart === this.player) this.hud.shout('CONK!', 'good', 0.8);
+          if (e.victim === this.player) {
+            this.hud.shout('BONK!', 'bad', 0.8);
+            this.cam.kick(0.5);
+          }
+          break;
+        }
+        case 'coconutDrop': {
+          const at = v(e.pos);
+          const below = sim.track.project(e.pos, -1);
+          const ground = below.height > -2 && below.height < 6 ? e.pos.y - below.height : e.pos.y - 1.6;
+          this.itemsView?.drop(at, v(e.vel), ground);
+          break;
+        }
       }
     }
     sim.items.events = [];
@@ -1126,7 +1157,19 @@ export class Game {
     const back = vel.clone().normalize().multiplyScalar(-0.8).addScaledVector(out, -0.4).add(new THREE.Vector3(0, 0.7, 0));
     this.vfx.trail('scrape', i, edge, back, grinding ? speed * 2.5 : 0);
 
-    this.vfx.trail('chips', i, rear, behind.clone().setY(1.2), onGround && k.boulderTime > 0 && speed > 4 ? speed * 1.5 : 0);
+    // The boulder: grit and chips spat out behind, dust ground up either side,
+    // and when it runs out the rock bursts back into a kart.
+    const rolling = onGround && k.boulderTime > 0 && speed > 4;
+    const under = view.pos.clone().setY(view.pos.y - 0.85);
+    const kick = new THREE.Vector3(0, 0, -1.6).applyQuaternion(view.rot);
+    this.vfx.trail('chips', i, under.clone().add(kick), behind.clone().setY(1.2), rolling ? 12 + speed * 2.5 : 0);
+    this.vfx.trail('rubble', i, under.clone().addScaledVector(kick, 0.5), behind.clone().setY(0.25), rolling ? 10 + speed * 1.2 : 0);
+    if ((this.wasBoulder[i] ?? 0) > 0 && k.boulderTime <= 0 && !k.out) {
+      const at = view.pos.clone().setY(view.pos.y + 0.3);
+      this.fx.emit({ pos: at, count: 40, color: [0x847e73, 0x625d55, 0xa59f92, 0x5f8f3e], speed: [4, 11], dir: new THREE.Vector3(0, 0.8, 0), spread: 1, size: [0.3, 0.7], life: [0.5, 1.1], gravity: 16 });
+      this.vfx.dust(view.pos.clone().setY(view.pos.y - 0.75), 1.8, 0xa39c90);
+    }
+    this.wasBoulder[i] = k.boulderTime;
     this.vfx.trail('cool', i, view.pos, null, k.coolTime > 0 ? 40 : 0);
     this.vfx.trail('feathers', i, view.pos.clone().setY(view.pos.y + 3.2), null, k.flying ? 6 : 0);
   }
@@ -1321,7 +1364,10 @@ export class Game {
       this.updateRings(dt);
     }
     // The touch ★ shows only with a full meter.
-    if (this.sim && this.state === 'race') this.touch.setSwaggerReady(this.sim.swaggerOn && this.sim.karts[this.player]!.swagger >= 100);
+    if (this.sim && this.state === 'race') {
+      this.touch.setSwaggerReady(this.sim.swaggerOn && this.sim.karts[this.player]!.swagger >= 100);
+      this.touch.setItem(this.sim.karts[this.player]!.item);
+    }
     this.venues[this.trackIndex]?.view.sky?.update(this.time, this.cam.camera);
     this.stage.render(this.cam.camera);
   }

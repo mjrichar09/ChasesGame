@@ -260,6 +260,54 @@ describe('snake', () => {
   });
 });
 
+describe('coconut', () => {
+  /** Kart 0 holding a coconut, kart 1 `ahead` metres up the road and `lateral` to the right. */
+  function lineUp(ahead: number, lateral: number): RaceSim {
+    const sim = racing(2);
+    putAt(sim, 0, 140, 0);
+    putAt(sim, 1, 140 + ahead, lateral);
+    settle(sim, 40);
+    Items.give(sim.karts[0]!, 'coconut');
+    return sim;
+  }
+
+  /** Throw with `button`, then let it fly out its range. */
+  function fling(sim: RaceSim, button: Partial<DriverInput>): void {
+    sim.step([press(button), press({})]);
+    settle(sim, 90);
+  }
+
+  it('goes straight at the kart in front, and is used up', () => {
+    const sim = lineUp(9, 0);
+    fling(sim, { item: true });
+    expect(sim.karts[0]!.item).toBe('none');
+    expect(sim.karts[1]!.wobbleTime).toBeGreaterThan(0);
+    expect(sim.karts[1]!.slowTime).toBeGreaterThan(0);
+  });
+
+  it('falls short of a kart beyond six kart lengths', () => {
+    const sim = lineUp(ITEMS.coconutRange + 6, 0);
+    fling(sim, { item: true });
+    expect(sim.karts[1]!.wobbleTime).toBe(0);
+    expect(sim.items.coconuts).toHaveLength(0);
+  });
+
+  it('curves toward the button pressed', () => {
+    const right = lineUp(10, 2.5);
+    fling(right, { whackRight: true });
+    expect(right.karts[1]!.wobbleTime).toBeGreaterThan(0);
+    const left = lineUp(10, 2.5);
+    fling(left, { whackLeft: true });
+    expect(left.karts[1]!.wobbleTime).toBe(0);
+  });
+
+  it('the item button bends it toward a kart off to one side', () => {
+    const sim = lineUp(10, 2.5);
+    fling(sim, { item: true });
+    expect(sim.karts[1]!.wobbleTime).toBeGreaterThan(0);
+  });
+});
+
 describe('swagger', () => {
   /** Two karts side by side on a straight, kart 0 with a full meter and move `m`. */
   function ready(m: Move, opts: { swagger?: boolean } = {}): RaceSim {
