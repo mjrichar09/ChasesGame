@@ -41,6 +41,10 @@ export class Menu {
   difficulty: Difficulty = 'normal';
   onSwagger: ((on: boolean) => void) | null = null;
   swagger = true;
+  /** Phone controls only: the auto-gas toggle shows when this is set. */
+  touch = false;
+  autoGas = false;
+  onAutoGas: ((on: boolean) => void) | null = null;
   onResume: (() => void) | null = null;
   onRestart: (() => void) | null = null;
   onQuit: (() => void) | null = null;
@@ -114,6 +118,15 @@ export class Menu {
             <b>Drive</b> W/S or ↑↓ · <b>Steer</b> A/D or ←→ · <b>Banana / item</b> Space · <b>Whack / fling</b> Q / E · <b>Swagger</b> hold F · <b>Look back</b> C · <b>Pause</b> Esc<br>
             <b>Controller</b> RT/LT drive · A item · <b>LB / RB snake swing / coconut fling</b> · hold X swagger · Y look back
           </div>
+          ${
+            this.touch
+              ? `<div class="difficulty autogas-toggle" role="radiogroup" aria-label="Auto gas">
+            <span>Auto gas</span>
+            <button data-ag="on" class="${this.autoGas ? 'on' : ''}">On</button>
+            <button data-ag="off" class="${this.autoGas ? '' : 'on'}">Off</button>
+          </div>`
+              : ''
+          }
           <div class="difficulty swagger-toggle" role="radiogroup" aria-label="Swagger">
             <span>Swagger</span>
             <button data-sw="on" class="${this.swagger ? 'on' : ''}">On</button>
@@ -152,10 +165,17 @@ export class Menu {
         this.showMove();
       });
     }
-    for (const b of this.root.querySelectorAll<HTMLButtonElement>('.difficulty:not(.swagger-toggle) button')) {
+    for (const b of this.root.querySelectorAll<HTMLButtonElement>('.autogas-toggle button')) {
+      b.addEventListener('click', () => {
+        this.autoGas = b.dataset.ag === 'on';
+        for (const o of this.root.querySelectorAll('.autogas-toggle button')) o.classList.toggle('on', o === b);
+        this.onAutoGas?.(this.autoGas);
+      });
+    }
+    for (const b of this.root.querySelectorAll<HTMLButtonElement>('.difficulty[aria-label="Opponents"] button')) {
       b.addEventListener('click', () => {
         this.difficulty = b.dataset.d as Difficulty;
-        for (const o of this.root.querySelectorAll('.difficulty:not(.swagger-toggle) button')) o.classList.toggle('on', o === b);
+        for (const o of this.root.querySelectorAll('.difficulty[aria-label="Opponents"] button')) o.classList.toggle('on', o === b);
         this.onDifficulty?.(this.difficulty);
       });
     }
@@ -201,6 +221,7 @@ export class Menu {
         <button class="big resume">${online ? 'BACK TO THE RACE' : 'RESUME'}</button>
         ${online ? '' : '<button class="restart">Restart race</button>'}
         <button class="mute">${muted ? 'Sound: off' : 'Sound: on'}</button>
+        ${this.touch ? `<button class="autogas">${this.autoGas ? 'Auto gas: on' : 'Auto gas: off'}</button>` : ''}
         <button class="quit">${online ? 'Leave race' : 'Quit race'}</button>
       </div>`;
     this.root.querySelector('.resume')!.addEventListener('click', () => this.onResume?.());
@@ -210,6 +231,12 @@ export class Menu {
     mute.addEventListener('click', () => {
       const m = this.onMute?.() ?? false;
       mute.textContent = m ? 'Sound: off' : 'Sound: on';
+    });
+    const ag = this.root.querySelector<HTMLButtonElement>('.autogas');
+    ag?.addEventListener('click', () => {
+      this.autoGas = !this.autoGas;
+      ag.textContent = this.autoGas ? 'Auto gas: on' : 'Auto gas: off';
+      this.onAutoGas?.(this.autoGas);
     });
   }
 

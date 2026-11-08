@@ -65,7 +65,7 @@ export const LAVA_RUN: TrackDef = {
     { kind: 'kicker', at: 6, offset: 10, length: 6, height: 1.0, lateral: -3.5, width: 5 },
     { kind: 'kicker', at: 6, offset: 10, length: 6, height: 1.0, lateral: 3.5, width: 5 },
     // A lava fissure across the road: clear it or you are toast.
-    { kind: 'gap', at: 10, offset: 30, length: 9, rampLength: 9, rampHeight: 1.8 },
+    { kind: 'gap', at: 10, offset: 40, length: 9, rampLength: 9, rampHeight: 1.8 },
     { kind: 'kicker', at: 12, offset: 22, length: 7, height: 1.3 },
     { kind: 'kicker', at: 16, offset: 24, length: 6, height: 1.1 },
     { kind: 'kicker', at: 19, offset: 10, length: 7, height: 1.2 },

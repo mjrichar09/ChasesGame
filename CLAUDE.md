@@ -85,8 +85,18 @@ Playwright. Deploys to GitHub Pages (`.github/workflows/pages.yml`).
 - Trees are placed in `sim/props.ts` (seeded) and shared by render and sim. Only trees
   within `TREE_REACH` of the road are solid, baked into ONE trimesh collider —
   hundreds of separate Rapier colliders cost ~60% more per physics step.
-- Road widths are scaled once by `WIDTH_SCALE` in `sim/track.ts`; track data stays
+- Road widths are scaled once by `WIDTH_SCALE` (1.875) in `sim/track.ts`; track data stays
   in its original units.
+- Barriers are three stacked logs (`WALL_STACK_HEIGHT`, solid to `WALL_SOLID_HEIGHT`) with an
+  invisible fence above each one (`Wall.fenceTop`, `FENCE_HEIGHT`; group `G_FENCE` in
+  `sim/kart.ts`) so nobody jumps off the track. The fence stops under any road passing overhead
+  (switchbacks, crossing branches). Karts on a parrot pass through it.
+- The parrot only lets go over the road: `RaceSim.parrotHome` sets `Kart.flyHome` when the kart
+  (or its landing) is off solid road, and the parrot then steers there and holds on, for up to
+  `PARROT.maxHold` extra seconds.
+- Music: `public/music/*.mp3`, one song per track (taken in turn, `musicFor` in
+  `game/session.ts`), one looping `<audio>` routed through the master gain; 20% faster
+  from lap 3. Touch "Auto gas" lives in `ui/touch.ts` (localStorage `jj-autogas`).
 - Narrow and wide stretches are `width` features (`WidthDef`: width, length, taper).
   Corners are rounded for the wider of the usual width and the stretch, so narrowing
   never sharpens a corner. Full-width ramps and pickup lanes follow the local width

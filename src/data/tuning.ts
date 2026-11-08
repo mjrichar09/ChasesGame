@@ -191,6 +191,15 @@ export const PARROT = {
   landGrace: 2.5,
   /** Furthest a flight may move you along the lap, fraction of its length. */
   maxSkip: 0.35,
+  /**
+   * The parrot only lets go over the road. In the last `homeTime` seconds, if
+   * the kart would come down off it, the parrot turns for the road itself
+   * (up to `homeTurn` rad/s) and keeps carrying — for up to `maxHold` extra
+   * seconds — until it is over solid road.
+   */
+  homeTime: 2,
+  homeTurn: 2.6,
+  maxHold: 6,
 } as const;
 
 export const RACE = {

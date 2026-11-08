@@ -16,14 +16,14 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { KART, PARROT, RACE, SIM } from '../data/tuning.js';
 import { type DriverInput, NEUTRAL_INPUT } from './input.js';
 import { Items } from './items.js';
-import { BARRIER_GROUPS, GROUND_GROUPS, Kart, TREE_GROUPS, yawQuat } from './kart.js';
+import { BARRIER_GROUPS, FENCE_GROUPS, GROUND_GROUPS, Kart, TREE_GROUPS, yawQuat } from './kart.js';
 import { type EventState, TREE, stepEvents } from './events.js';
 import { lavaFront } from './lava.js';
 import { MOVES, type Move, type SwaggerTrack, newSwaggerTrack, shoves, stepSwagger } from './swagger.js';
 import { buildTerrain, terrainHeight } from './terrain.js';
 import { type Props, type Solid, buildProps, propSolids, solidsMesh } from './props.js';
 import { LOOKS } from '../data/tracks/looks.js';
-import { type Vec3, add, cross, dot, normalize, scale, sub, v3 } from './math.js';
+import { type Vec3, add, clamp, cross, dot, normalize, scale, sub, v3 } from './math.js';
 import { Rng } from './rng.js';
 import { Track, type TrackDef } from './track.js';
 
@@ -117,6 +117,8 @@ export class RaceSim {
   private roadCollider!: RAPIER.Collider;
   private ground!: RAPIER.RigidBody;
   private readonly wallColliders: RAPIER.Collider[] = [];
+  /** The invisible fence over each barrier (null where something passes overhead). */
+  private readonly fenceColliders: (RAPIER.Collider | null)[] = [];
   /** The trees along the course (solid: see sim/props.ts). */
   props!: Props;
   /** The trees that are solid (those within reach of the road). */
@@ -239,6 +241,22 @@ export class RaceSim {
         ground,
       );
       this.wallColliders.push(c);
+      // The invisible fence from the top of the logs up: no jumping off the track.
+      const top = w.center.y + w.half.y;
+      const half = (w.fenceTop - top) / 2;
+      this.fenceColliders.push(
+        half > 0.25
+          ? this.world.createCollider(
+              RAPIER.ColliderDesc.cuboid(w.half.x, half, w.half.z)
+                .setTranslation(w.center.x, top + half, w.center.z)
+                .setRotation(yawQuat(w.yaw))
+                .setFriction(0.3)
+                .setRestitution(0.2)
+                .setCollisionGroups(FENCE_GROUPS),
+              ground,
+            )
+          : null,
+      );
     }
   }
 
@@ -248,6 +266,35 @@ export class RaceSim {
       RAPIER.ColliderDesc.trimesh(road.vertices, road.indices).setFriction(0.6).setCollisionGroups(GROUND_GROUPS),
       this.ground,
     );
+  }
+
+  /**
+   * Where a parrot must carry the kart before it may let go, or null if it
+   * would come down on the road. The kart and its predicted landing must both
+   * be over solid road (no gap, not near an edge) close to where the lap says
+   * the kart is — so
+   * the parrot can't drop a kart off the side, into a gap, or onto some other
+   * stretch of the course.
+   */
+  private parrotHome(kart: Kart, pr: Progress): Vec3 | null {
+    const track = this.track;
+    const pos = kart.position;
+    const v = kart.velocity;
+    const safe = (p: Vec3, margin: number): boolean => {
+      const q = track.project(p, pr.s);
+      const k = track.at(q.s);
+      if (Math.abs(track.delta(pr.s, q.s)) > 60 || !k.road) return false;
+      if (track.inGap(q.s - 4) || track.inGap(q.s) || track.inGap(q.s + 4)) return false;
+      return Math.abs(q.lateral) < k.halfWidth - margin;
+    };
+    // Where it is now, and where it comes down: the drift through the sag and the fall.
+    const t = Math.min(Math.max(0, kart.flyTime), PARROT.sag) * 0.6 + 0.4;
+    const land = v3(pos.x + v.x * t, pos.y, pos.z + v.z * t);
+    if (safe(pos, 2) && safe(land, 3)) return null;
+    // Head for the middle half of the road a little way on.
+    const s = pr.s + 15;
+    const hw = track.at(s).halfWidth;
+    return track.pointAt(s, clamp(pr.lateral, -hw * 0.5, hw * 0.5));
   }
 
   /** Laps completed by whoever is furthest round (DNFs excluded). */
@@ -300,6 +347,7 @@ export class RaceSim {
       track.walls.forEach((w, i) => {
         if (track.between(w.s, gap.s0 - 2, gap.s1 + 2) || track.between(w.s + 2, gap.s0, gap.s1)) {
           this.wallColliders[i]?.setEnabled(false);
+          this.fenceColliders[i]?.setEnabled(false);
         }
       });
       this.items.events.push({ type: 'track', kind: 'snap', pos: track.pointAt((gap.s0 + gap.s1) / 2, 0) });
@@ -384,7 +432,10 @@ export class RaceSim {
         kart.current = scale(v3(r.x, 0, r.z), flood.def.current * stage);
       } else kart.current = v3();
       // The parrot holds its height over the road below (never below take-off).
-      if (kart.flying) kart.flyTargetY = Math.max(kart.flyBaseY, this.track.at(pr.s).p.y) + PARROT.altitude;
+      if (kart.flying) {
+        kart.flyTargetY = Math.max(kart.flyBaseY, this.track.at(pr.s).p.y) + PARROT.altitude;
+        kart.flyHome = this.parrotHome(kart, pr);
+      }
     }
     const eventsFrom = this.items.events.length;
     for (const b of this.reportedBonks) {

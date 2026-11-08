@@ -196,6 +196,9 @@ export class Game {
     this.menu.onTrack = (i) => this.selectTrack(i);
     this.menu.difficulty = this.difficulty;
     this.menu.swagger = this.swaggerOn;
+    this.menu.touch = TouchControls.wanted();
+    this.menu.autoGas = this.touch.autoGas;
+    this.menu.onAutoGas = (on) => (this.touch.autoGas = on);
     this.menu.onSwagger = (on) => {
       this.swaggerOn = on;
       try {
@@ -410,6 +413,7 @@ export class Game {
   private backToRoom(): void {
     this.sim = null; // Freed by the netcode.
     this.endRace();
+    this.sound.stopMusic();
     this.state = 'menu';
     this.hud.show(false);
     this.touch.show(false);
@@ -497,6 +501,7 @@ export class Game {
 
   private toMenu(): void {
     this.endRace();
+    this.sound.stopMusic();
     this.state = 'menu';
     this.hud.show(false);
     this.touch.show(false);
@@ -597,6 +602,7 @@ export class Game {
     this.resultsKey = '';
     this.sound.unlock();
     this.sound.startEngine();
+    this.sound.startMusic(musicFor(sim.track.def.id));
     void this.keepAwake(true);
   }
 
@@ -605,10 +611,13 @@ export class Game {
       this.state = 'paused';
       this.menu.pause(this.sound.muted, this.mode !== 'solo');
       this.sound.stopEngine();
+      // Online the race (and its music) goes on behind the menu.
+      if (this.mode === 'solo') this.sound.pauseMusic(true);
     } else if (this.state === 'paused') {
       this.state = 'race';
       this.menu.hide();
       this.sound.startEngine();
+      this.sound.pauseMusic(false);
     }
   }
 
@@ -651,6 +660,11 @@ export class Game {
       return;
     }
     if (this.state !== 'race') return;
+
+    // The music picks up 20% from the third lap (the final lap in a shorter race).
+    if (playerPr.finishTime === null && sim.laps > 1 && playerPr.lap >= Math.min(MUSIC_FAST_LAP, sim.laps - 1)) {
+      this.sound.setMusicRate(MUSIC_FAST_RATE);
+    }
 
     // Lap and finish callouts for the player.
     if (playerPr.lap !== this.lastLap && playerPr.finishTime === null) {
@@ -1509,6 +1523,17 @@ function loadDifficulty(): Difficulty {
     // Storage blocked.
   }
   return 'normal';
+}
+
+/** Lap (0-based) from which the music plays faster, and how much faster. */
+const MUSIC_FAST_LAP = 2;
+const MUSIC_FAST_RATE = 1.2;
+/** The two songs, taken in turn down the track list: one song per track. */
+const SONGS = ['music/jungle-groove.mp3', 'music/jungle-loop.mp3'];
+
+function musicFor(trackId: string): string {
+  const i = Math.max(0, TRACKS.findIndex((t) => t.id === trackId));
+  return import.meta.env.BASE_URL + SONGS[i % SONGS.length]!;
 }
 
 function loadSwagger(): boolean {

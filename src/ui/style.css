@@ -1142,6 +1142,20 @@ button:disabled {
   align-self: end;
 }
 
+.autogas-toggle span {
+  white-space: nowrap;
+}
+
+/* Auto gas: no GAS button; BRAKE takes its place under the thumb. */
+.touch.autogas .tb-gas {
+  display: none;
+}
+
+.touch.autogas .tb-brake {
+  grid-area: gas;
+  justify-self: auto;
+}
+
 /* --------------------------------------------------------- small screens */
 
 @media (max-width: 820px), (max-height: 500px) {

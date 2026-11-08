@@ -9,6 +9,9 @@
  *
  * Each button tracks its own pointer, so sliding a thumb from GAS onto
  * BRAKE (or holding gas while tapping an item with another finger) works.
+ *
+ * Auto gas (a menu setting, remembered): the kart accelerates by itself and
+ * the GAS button goes away; holding BRAKE lifts off and brakes.
  */
 
 import type { DriverInput } from '../sim/input.js';
@@ -26,6 +29,7 @@ export class TouchControls implements InputSource {
   private readonly knob: HTMLDivElement;
   private readonly pad: HTMLDivElement;
   active = false;
+  private auto = loadAutoGas();
 
   constructor(parent: HTMLElement) {
     this.root = document.createElement('div');
@@ -41,6 +45,7 @@ export class TouchControls implements InputSource {
         <button data-b="gas" class="tb tb-gas">GAS</button>
       </div>`;
     parent.appendChild(this.root);
+    this.root.classList.toggle('autogas', this.auto);
     this.knob = this.root.querySelector('.touch-knob')!;
     this.pad = this.root.querySelector('.touch-pad')!;
 
@@ -127,6 +132,21 @@ export class TouchControls implements InputSource {
     this.root.querySelector<HTMLElement>('.tb-swagger')!.classList.toggle('ready', ready);
   }
 
+  /** Auto gas: the kart accelerates on its own; BRAKE still brakes. */
+  get autoGas(): boolean {
+    return this.auto;
+  }
+
+  set autoGas(on: boolean) {
+    this.auto = on;
+    this.root.classList.toggle('autogas', on);
+    try {
+      localStorage.setItem('jj-autogas', on ? 'on' : 'off');
+    } catch {
+      // Storage blocked — lasts this visit.
+    }
+  }
+
   show(on: boolean): void {
     this.active = on;
     this.root.style.display = on ? '' : 'none';
@@ -136,7 +156,7 @@ export class TouchControls implements InputSource {
     if (!this.active) return null;
     const b = (n: string) => this.buttons.get(n) ?? false;
     return {
-      throttle: b('gas') ? 1 : 0,
+      throttle: b('gas') || (this.auto && !b('brake')) ? 1 : 0,
       brake: b('brake') ? 1 : 0,
       steer: this.steer,
       item: b('item'),
@@ -144,6 +164,14 @@ export class TouchControls implements InputSource {
       whackRight: b('whackRight'),
       swagger: b('swagger'),
     };
+  }
+}
+
+function loadAutoGas(): boolean {
+  try {
+    return localStorage.getItem('jj-autogas') === 'on';
+  } catch {
+    return false;
   }
 }
 

@@ -190,6 +190,11 @@ export interface Wall {
   half: Vec3;
   yaw: number;
   side: -1 | 1;
+  /**
+   * World height of the top of the invisible fence standing on this barrier:
+   * karts can't jump out over it. Kept under any road passing overhead.
+   */
+  fenceTop: number;
 }
 
 export interface Pickup {
@@ -213,17 +218,25 @@ export const DS = 1;
 const MAX_BANK = 0.28;
 /** Bank per unit curvature (rad · m). */
 const BANK_GAIN = 9;
-/** Visible log height, m. */
+/** Visible height of one log, m (barriers are two logs stacked). */
 export const WALL_HEIGHT = 1.1;
+/** Visible barrier height: two stacked logs. */
+export const WALL_STACK_HEIGHT = 2;
 /** Collision height, m — taller than the logs so a bouncing kart cannot hop them. */
-export const WALL_SOLID_HEIGHT = 1.6;
+export const WALL_SOLID_HEIGHT = 2.6;
 /**
  * Up on terrace platforms the barrier's collision is taller still: karts
  * landing a drop rebound a couple of metres, and any sideways drift carried
  * them over a normal barrier and down into the valley.
  */
-export const WALL_ALOFT_HEIGHT = 3;
+export const WALL_ALOFT_HEIGHT = 3.5;
 export const WALL_THICK = 0.6;
+/**
+ * The invisible fence above every barrier reaches this far above the road:
+ * higher than any ramp throws a kart, so nobody jumps off the track. Karts
+ * on a parrot pass through it (the parrot only lets go over the road).
+ */
+export const FENCE_HEIGHT = 25;
 
 export class Track {
   readonly def: TrackDef;
@@ -492,7 +505,9 @@ export class Track {
           const d = sub(b, a);
           const len = Math.hypot(d.x, d.z);
           const h = this.aloft(s) ? WALL_ALOFT_HEIGHT : WALL_SOLID_HEIGHT;
+          const top = mid.y + h - 0.15;
           this.walls.push({
+            fenceTop: Math.max(top, this.fenceCeiling(mid, top, s)),
             s,
             center: add(mid, v3(0, h / 2 - 0.15, 0)),
             // A little overlap so there are no seams to snag on.
@@ -504,6 +519,24 @@ export class Track {
         s = next;
       }
     }
+  }
+
+  /**
+   * How high the invisible fence over a barrier at `p` may go: FENCE_HEIGHT
+   * above the road, but never up into another stretch of road overhead (a
+   * branch crossing above, a terrace above the next ledge).
+   */
+  private fenceCeiling(p: Vec3, wallTop: number, s: number): number {
+    let ceil = p.y + FENCE_HEIGHT;
+    for (let i = 0; i < this.samples.length; i += 2) {
+      const o = this.samples[i]!;
+      if (o.p.y <= wallTop || Math.abs(this.delta(s, o.s)) < 40) continue;
+      const reach = o.halfWidth * 1.3 + WALL_THICK + 4;
+      if (Math.hypot(o.p.x - p.x, o.p.z - p.z) > reach) continue;
+      // Stay under the other road's underside (a branch is ~0.6 half-widths deep).
+      ceil = Math.min(ceil, o.p.y - o.halfWidth * 0.7 - 2);
+    }
+    return ceil;
   }
 
   /**
@@ -742,7 +775,7 @@ function catmull(p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3, t: number): Vec3 {
  * Every road is laid out this much wider than its data says: widths, ramp
  * widths and positions across the road, and pickup lanes all scale together.
  */
-export const WIDTH_SCALE = 1.25;
+export const WIDTH_SCALE = 1.875;
 
 function widen(def: TrackDef): TrackDef {
   const k = WIDTH_SCALE;
