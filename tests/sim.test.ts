@@ -564,18 +564,20 @@ describe('lava', () => {
   });
 });
 
-describe('parrot', () => {
-  function airborne(): RaceSim {
-    const sim = racing(2);
-    putAt(sim, 0, 140, 0);
-    putAt(sim, 1, 300, 0);
-    settle(sim, 40);
-    Items.give(sim.karts[0]!, 'parrot');
-    sim.step([press({ item: true }), press({})]);
-    return sim;
-  }
+/** Kart 0 just taken off on a parrot, on Vine Valley's back straight. */
+function airborne(): RaceSim {
+  const sim = racing(2);
+  putAt(sim, 0, 140, 0);
+  putAt(sim, 1, 300, 0);
+  settle(sim, 40);
+  Items.give(sim.karts[0]!, 'parrot');
+  sim.step([press({ item: true }), press({})]);
+  return sim;
+}
 
-  it('lifts the kart for six seconds at altitude, then lets go', () => {
+describe('parrot', () => {
+
+  it('lifts the kart for six seconds at altitude, then lets go (over the road)', () => {
     const sim = airborne();
     const kart = sim.karts[0]!;
     expect(kart.flying).toBe(true);
@@ -585,8 +587,13 @@ describe('parrot', () => {
     expect(kart.flying).toBe(true);
     expect(kart.position.y - sim.track.at(sim.progress[0]!.s).p.y).toBeGreaterThan(PARROT.altitude - 1.5);
     expect(kart.position.y).toBeGreaterThan(road + 3);
-    settle(sim, 120 * 3 + 10, [press({ throttle: 1 })]);
+    settle(sim, 120 * 3 - 10, [press({ throttle: 1 })]);
+    expect(kart.flying).toBe(true);
+    // Straight on would come down off the road: it carries on to the road first.
+    for (let i = 0; i < 120 * (PARROT.maxHold + 1) && kart.flying; i++) sim.step([press({ throttle: 1 })]);
     expect(kart.flying).toBe(false);
+    const pr = sim.progress[0]!;
+    expect(Math.abs(pr.lateral)).toBeLessThan(sim.track.at(pr.s).halfWidth);
   });
 
   it('cannot fly through a tree', () => {
@@ -643,6 +650,40 @@ describe('parrot', () => {
     settle(sim, 2, [press({ throttle: 1 })]);
     expect(pr.dist).toBeGreaterThan(after - 50);
     expect(pr.dist).toBeLessThan(after + 1);
+  });
+});
+
+describe('no way off the track', () => {
+  it('the parrot never lets go over the jungle: it carries the kart back to the road', () => {
+    for (const steer of [1, -1]) {
+      const sim = airborne();
+      const kart = sim.karts[0]!;
+      // Steer hard one way for the whole flight: left alone it would come down far off the road.
+      let steps = 0;
+      while (kart.flying && steps < 120 * (PARROT.time + PARROT.maxHold + 2)) {
+        sim.step([press({ throttle: 1, steer }), press({})]);
+        steps++;
+      }
+      expect(kart.flying).toBe(false);
+      const pr = sim.progress[0]!;
+      expect(Math.abs(pr.lateral), `let go ${pr.lateral.toFixed(1)} m off centre`).toBeLessThan(sim.track.at(pr.s).halfWidth);
+      sim.free();
+    }
+  });
+
+  it('an invisible fence over the barriers stops a kart jumping out', () => {
+    const sim = racing(1);
+    const kart = sim.karts[0]!;
+    const s = 140;
+    const k = sim.track.at(s);
+    putAt(sim, 0, s, k.halfWidth - 3);
+    // High above the logs and flying sideways at the edge.
+    kart.body.setTranslation(add(kart.position, v3(0, 7, 0)), true);
+    kart.body.setLinvel(scale(k.r, 25), true);
+    settle(sim, 120, [press({})]);
+    const p = sim.track.project(kart.position, s);
+    expect(Math.abs(p.lateral)).toBeLessThan(sim.track.at(p.s).halfWidth + 1);
+    sim.free();
   });
 });
 

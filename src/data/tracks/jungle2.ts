@@ -43,9 +43,9 @@ export const CANOPY_CREEK: TrackDef = {
     { x: 148, z: -66, y: 1.5 },
     { x: 100, z: -78, y: -0.45 },
     { x: 76, z: -82, y: 0 },
-    { x: 47, z: -30, y: 0.6, width: 13 },
-    { x: 18, z: -72, y: 0.9 },
-    { x: 22, z: -120, y: 1, width: 13 },
+    { x: 56, z: -30, y: 0.6, width: 13 },
+    { x: 27, z: -72, y: 0.9 },
+    { x: 30, z: -120, y: 1, width: 13 },
     { x: -6, z: -116, y: 1 },
   ],
   features: [

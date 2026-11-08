@@ -17,7 +17,7 @@ import { buildTerrain, terrainHeight } from '../sim/terrain.js';
 import { type Placement, type Props, type SceneryKind, buildProps } from '../sim/props.js';
 import { type VolcanoView, buildVolcanoView, ocean, terrainMesh } from './volcanoView.js';
 import { type Sky, roadsideTufts, skyDressing } from './polish.js';
-import { BRANCH_N, type Track, WALL_HEIGHT, WALL_SOLID_HEIGHT, WALL_THICK, type Water, branchProfile } from '../sim/track.js';
+import { BRANCH_N, type Track, WALL_HEIGHT, WALL_SOLID_HEIGHT, WALL_STACK_HEIGHT, WALL_THICK, type Water, branchProfile } from '../sim/track.js';
 import { broadleaf, palm } from './flora.js';
 import { GEO, PartBuilder, toon } from './toon.js';
 
@@ -463,28 +463,33 @@ function ground(base: string): THREE.Mesh {
   return mesh;
 }
 
-/** Log barriers: one instanced log per wall segment, with a cut-end cap. */
+/** Log barriers: a stack of logs per wall segment, pinned by a tall stake. */
 function walls(track: Track): THREE.Group {
   const g = new THREE.Group();
+  const LOGS = 3;
   const logGeo = new THREE.CylinderGeometry(WALL_HEIGHT * 0.42, WALL_HEIGHT * 0.45, 1, 9);
   logGeo.rotateX(Math.PI / 2);
-  const logs = new THREE.InstancedMesh(logGeo, toon(0x7b4f2a), track.walls.length);
-  const stakeGeo = new THREE.CylinderGeometry(0.08, 0.1, 1.6, 6);
+  const logs = new THREE.InstancedMesh(logGeo, toon(0x7b4f2a), track.walls.length * LOGS);
+  const stakeGeo = new THREE.CylinderGeometry(0.08, 0.1, WALL_STACK_HEIGHT + 0.6, 6);
   const stakes = new THREE.InstancedMesh(stakeGeo, toon(0x5a3a1d), track.walls.length);
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const rng = new Rng(21);
-  // The collider is taller than the log (taller still up on terraces); sit
-  // the log at the bottom of it.
+  // The collider is taller than the logs (taller still up on terraces); sit
+  // the stack at the bottom of it.
   const lift = WALL_SOLID_HEIGHT / 2 + 0.15 - (WALL_SOLID_HEIGHT - WALL_HEIGHT) / 2;
+  const step = (WALL_STACK_HEIGHT - WALL_HEIGHT * 0.8) / (LOGS - 1);
   track.walls.forEach((w, i) => {
     q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), w.yaw);
-    const s = 0.9 + rng.next() * 0.2;
     const base = w.center.y - w.half.y + lift;
-    m.compose(new THREE.Vector3(w.center.x, base - 0.1, w.center.z), q, new THREE.Vector3(s, s * 0.9, w.half.z * 2));
-    logs.setMatrixAt(i, m);
+    for (let j = 0; j < LOGS; j++) {
+      // Each log a little thinner than the one under it.
+      const s = (0.9 + rng.next() * 0.2) * (1 - j * 0.08);
+      m.compose(new THREE.Vector3(w.center.x, base - 0.1 + j * step, w.center.z), q, new THREE.Vector3(s, s * 0.9, w.half.z * 2));
+      logs.setMatrixAt(i * LOGS + j, m);
+    }
     const off = new THREE.Vector3(0, 0, w.half.z).applyQuaternion(q);
-    m.compose(new THREE.Vector3(w.center.x + off.x, base + 0.1, w.center.z + off.z), q, new THREE.Vector3(1, 1, 1));
+    m.compose(new THREE.Vector3(w.center.x + off.x, base - 0.5 + (WALL_STACK_HEIGHT + 0.6) / 2, w.center.z + off.z), q, new THREE.Vector3(1, 1, 1));
     stakes.setMatrixAt(i, m);
   });
   logs.castShadow = true;
@@ -974,26 +979,25 @@ function vineRails(track: Track): THREE.Group {
   const g = new THREE.Group();
   const n = track.walls.length;
   // Twig stubs rather than posts: knobbly, tapering, a little off true.
-  const postGeo = new THREE.CylinderGeometry(0.05, 0.16, 1.5, 5);
+  const postGeo = new THREE.CylinderGeometry(0.05, 0.16, WALL_STACK_HEIGHT + 0.3, 5);
   const ropeGeo = new THREE.CylinderGeometry(0.06, 0.06, 1, 5);
   ropeGeo.rotateX(Math.PI / 2);
   const posts = new THREE.InstancedMesh(postGeo, toon(0x6b4524), n);
-  const ropes = new THREE.InstancedMesh(ropeGeo, toon(0x3f7d2c), n * 2);
+  const ROPES = 4;
+  const ropes = new THREE.InstancedMesh(ropeGeo, toon(0x3f7d2c), n * ROPES);
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
-  const drop = (WALL_SOLID_HEIGHT - WALL_HEIGHT) / 2;
   track.walls.forEach((w, i) => {
     q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), w.yaw);
     const base = w.center.y - w.half.y + 0.15;
     const off = new THREE.Vector3(0, 0, w.half.z).applyQuaternion(q);
     const lean = new THREE.Quaternion().setFromEuler(new THREE.Euler(((i * 37) % 7) * 0.04 - 0.12, 0, ((i * 53) % 5) * 0.05 - 0.1));
-    m.compose(new THREE.Vector3(w.center.x + off.x, base + 0.65, w.center.z + off.z), q.clone().multiply(lean), new THREE.Vector3(1, 1, 1));
+    m.compose(new THREE.Vector3(w.center.x + off.x, base - 0.1 + (WALL_STACK_HEIGHT + 0.3) / 2, w.center.z + off.z), q.clone().multiply(lean), new THREE.Vector3(1, 1, 1));
     posts.setMatrixAt(i, m);
-    for (let k = 0; k < 2; k++) {
-      // Sagging a touch: the lower rope a little lower in the middle.
-      const y = base + (k === 0 ? 1.05 : 0.55) - drop * 0;
+    for (let k = 0; k < ROPES; k++) {
+      const y = base + 0.55 + k * ((WALL_STACK_HEIGHT - 0.55) / (ROPES - 1));
       m.compose(new THREE.Vector3(w.center.x, y, w.center.z), q, new THREE.Vector3(1, 1, w.half.z * 2));
-      ropes.setMatrixAt(i * 2 + k, m);
+      ropes.setMatrixAt(i * ROPES + k, m);
     }
   });
   g.add(posts, ropes);

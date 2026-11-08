@@ -56,14 +56,19 @@ const G_GROUND = 0x0001;
 const G_BARRIER = 0x0002;
 const G_KART = 0x0004;
 const G_SKIRT = 0x0008;
+/** The invisible fence over the barriers: only karts touch it, and not on a parrot. */
+const G_FENCE = 0x0010;
 const groups = (member: number, filter: number) => (member << 16) | filter;
 export const GROUND_GROUPS = groups(G_GROUND, 0xffff);
 export const BARRIER_GROUPS = groups(G_BARRIER, 0xffff);
 const KART_GROUPS = groups(G_KART, 0xffff);
+/** A kart on a parrot flies through the invisible fence (never through logs or trees). */
+const FLYING_KART_GROUPS = groups(G_KART, 0xffff & ~G_FENCE);
+export const FENCE_GROUPS = groups(G_FENCE, G_KART);
 /** Trees: barriers that only karts can touch (no static pairs with the ground and walls). */
 export const TREE_GROUPS = groups(G_BARRIER, G_KART);
 const SKIRT_GROUPS = groups(G_SKIRT, G_KART | G_SKIRT);
-const WHEEL_RAY_GROUPS = groups(0xffff, 0xffff & ~(G_BARRIER | G_KART | G_SKIRT));
+const WHEEL_RAY_GROUPS = groups(0xffff, 0xffff & ~(G_BARRIER | G_KART | G_SKIRT | G_FENCE));
 
 export interface WheelState {
   /** Mount point in chassis coordinates. */
@@ -116,6 +121,14 @@ export class Kart {
   flyTargetY = 0;
   /** Road height where the flight started — the parrot never dips below it. */
   flyBaseY = 0;
+  /**
+   * Set by the race each step of a flight: where the parrot must carry the
+   * kart because letting go now would drop it off the road (null when the
+   * drop would land on the road).
+   */
+  flyHome: Vec3 | null = null;
+  /** Seconds the parrot has carried on past its time, homing for the road. */
+  flyHeld = 0;
   /** Seconds since the parrot let go (large when it never has). */
   sinceFlight = 1e9;
   /** Out of the race (taken by the lava): items and other karts ignore it. */
@@ -318,6 +331,8 @@ export class Kart {
   takeOff(baseY: number): void {
     this.flyTime = PARROT.time;
     this.flyElapsed = 0;
+    this.flyHeld = 0;
+    this.flyHome = null;
     this.flyBaseY = baseY;
     this.spinTime = 0;
     this.wobbleTime = 0;
@@ -394,6 +409,7 @@ export class Kart {
     this.tick(dt);
 
     this.sinceFlight += dt;
+    this.fenced(this.flyTime <= 0);
     if (this.flyTime > 0) {
       this.fly(dt, input);
       this.prevInput = { ...raw };
@@ -401,6 +417,14 @@ export class Kart {
     }
     this.drive(dt, input);
     this.prevInput = { ...raw };
+  }
+
+  private fenceOn = true;
+  /** The invisible fence over the barriers stops karts, except on a parrot. */
+  private fenced(on: boolean): void {
+    if (on === this.fenceOn) return;
+    this.fenceOn = on;
+    this.collider.setCollisionGroups(on ? KART_GROUPS : FLYING_KART_GROUPS);
   }
 
   /** Status timers. */
@@ -598,6 +622,11 @@ export class Kart {
   private fly(dt: number, input: DriverInput): void {
     this.flyElapsed += dt;
     this.flyTime -= dt;
+    // Never let go off the road: hold on (at full height) while homing for it.
+    if (this.flyHome && this.flyTime < PARROT.sag && this.flyHeld < PARROT.maxHold) {
+      this.flyHeld += dt;
+      this.flyTime = PARROT.sag;
+    }
     this.steerAngle = moveToward(this.steerAngle, 0, KART.steerRate * dt);
     for (const w of this.wheels) {
       w.contact = false;
@@ -609,8 +638,19 @@ export class Kart {
     const vel = body.linvel();
     const f = this.forward;
     let yaw = Math.atan2(f.x, f.z);
-    yaw += -input.steer * PARROT.turnRate * dt;
-    const pace = PARROT.speed * (PARROT.coast + (1 - PARROT.coast) * input.throttle) * (1 - (1 - PARROT.brake) * input.brake);
+    const home = this.flyHome;
+    let throttle = input.throttle;
+    let brake = input.brake;
+    if (home && this.flyTime < PARROT.homeTime) {
+      // Coming down off the road: the parrot heads for it, whatever the driver does.
+      const want = Math.atan2(home.x - this.position.x, home.z - this.position.z);
+      let dYaw = want - yaw;
+      dYaw = Math.atan2(Math.sin(dYaw), Math.cos(dYaw));
+      yaw += clamp(dYaw, -PARROT.homeTurn * dt, PARROT.homeTurn * dt);
+      throttle = 1;
+      brake = 0;
+    } else yaw += -input.steer * PARROT.turnRate * dt;
+    const pace = PARROT.speed * (PARROT.coast + (1 - PARROT.coast) * throttle) * (1 - (1 - PARROT.brake) * brake);
     const h = Math.hypot(vel.x, vel.z);
     const hNew = moveToward(h, pace, PARROT.accel * dt);
     // Height: climb to the target; sag as the parrot tires, then let go.
@@ -629,6 +669,7 @@ export class Kart {
     if (this.flyTime <= 0) {
       this.flyTime = 0;
       this.sinceFlight = 0;
+      this.flyHome = null;
     }
   }
 

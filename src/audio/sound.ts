@@ -1,5 +1,6 @@
 /**
- * All game audio, synthesised (as in RSC): no files to ship or license.
+ * All game audio. Effects are synthesised (as in RSC); the one thing shipped
+ * as files is the background music (`public/music/`, one song per track).
  *
  * - The player's engine is RSC's `EngineVoice`, fed a fake rev counter from
  *   speed, so it pitches up with the kart and bogs on landings.
@@ -8,6 +9,10 @@
  * - Gorilla voices: a buzzy source through two vowel formants, so hoots,
  *   grunts and roars sound throaty rather than beepy. Bigger gorillas are
  *   lower.
+ *
+ * - Music: one <audio> element, looping, routed through the master gain so
+ *   mute and leaving the page silence it too. It plays faster on the final
+ *   laps (`setMusicRate`).
  *
  * The AudioContext starts on the first user gesture, as browsers require.
  */
@@ -51,6 +56,10 @@ export class Sound {
 
   /** True while the page is hidden or unfocused: everything is silent. */
   private away = false;
+  /** The background music player (one element, reused: it can only be wired into the graph once). */
+  private music: HTMLAudioElement | null = null;
+  private musicOn = false;
+  private musicPaused = false;
   /** When each gorilla last spoke (audio clock), so voices don't pile up. */
   private lastVoice = new Map<number, number>();
 
@@ -64,10 +73,24 @@ export class Sound {
     if (!this.ctx) return;
     if (away) void this.ctx.suspend();
     else void this.ctx.resume();
+    this.syncMusic();
   }
 
   /** Call from a user gesture. Safe to call repeatedly. */
   unlock(): void {
+    // Phones only let a media element play once a gesture has started it:
+    // poke it now (it is started for real when a race begins).
+    const m = this.music;
+    if (m && !this.musicOn && m.paused) {
+      m.muted = true;
+      m.play().then(
+        () => {
+          if (!this.musicOn) m.pause();
+          m.muted = false;
+        },
+        () => (m.muted = false),
+      );
+    }
     if (this.ctx) {
       if (this.ctx.state === 'suspended' && !this.away) void this.ctx.resume();
       return;
@@ -88,11 +111,61 @@ export class Sound {
     engineBus.connect(this.master);
     this.engine = new EngineVoice(ctx, engineBus);
     this.ambience();
+    this.music = new Audio();
+    this.music.loop = true;
+    this.music.preload = 'auto';
+    const musicBus = ctx.createGain();
+    musicBus.gain.value = 0.55;
+    musicBus.connect(this.master);
+    try {
+      ctx.createMediaElementSource(this.music).connect(musicBus);
+    } catch {
+      // No media routing here: the element plays straight out (mute still pauses it).
+    }
+  }
+
+  /** Start a song from the top, looping, at normal speed. */
+  startMusic(url: string): void {
+    const m = this.music;
+    if (!m) return;
+    const abs = new URL(url, document.baseURI).href;
+    if (m.src !== abs) m.src = abs;
+    m.currentTime = 0;
+    m.playbackRate = 1;
+    m.muted = false;
+    this.musicOn = true;
+    this.musicPaused = false;
+    this.syncMusic();
+  }
+
+  stopMusic(): void {
+    this.musicOn = false;
+    this.music?.pause();
+  }
+
+  /** Hold the music (the pause menu) or carry on. */
+  pauseMusic(paused: boolean): void {
+    this.musicPaused = paused;
+    this.syncMusic();
+  }
+
+  /** 1 = normal; 1.2 = 20% faster (the final laps). */
+  setMusicRate(rate: number): void {
+    if (this.music && this.music.playbackRate !== rate) this.music.playbackRate = rate;
+  }
+
+  private syncMusic(): void {
+    const m = this.music;
+    if (!m) return;
+    const play = this.musicOn && !this.musicPaused && !this.away && !this.muted;
+    if (play && m.paused) void m.play().catch(() => {});
+    else if (!play && !m.paused) m.pause();
   }
 
   toggleMute(): boolean {
     this.muted = !this.muted;
     if (this.master && this.ctx) this.master.gain.setTargetAtTime(this.muted ? 0 : 0.8, this.ctx.currentTime, 0.05);
+    this.syncMusic();
     return this.muted;
   }
 
